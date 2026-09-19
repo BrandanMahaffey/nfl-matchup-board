@@ -1,6 +1,6 @@
 # NFL Matchup Board
 
-Weekly football-pool comparison board. One join per game: nflverse team form, injuries, OL/DL depth, PFR pressure, NGS, nfelo (or moneyline), and outdoor weather.
+Weekly football-pool comparison board. One join per game: nflverse team form, injuries, last-week snaps, OL/DL depth, PFR pressure, NGS, nfelo (or moneyline), and outdoor weather.
 
 No PFF. No paid odds API. Numbers are context, not predicted scores.
 

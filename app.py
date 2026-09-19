@@ -130,6 +130,17 @@ def render_card(c: dict):
             f"**OL {home}** {c.get('ol_home') or '—'}  \n"
             f"**DL {away}** {c.get('dl_away') or '—'}"
         )
+        s1, s2 = st.columns(2)
+        s1.markdown(
+            f"**{away} last-week snaps (50%+)**  \n"
+            f"off {c.get('snaps_off_away') or '—'}  \n"
+            f"def {c.get('snaps_def_away') or '—'}"
+        )
+        s2.markdown(
+            f"**{home} last-week snaps (50%+)**  \n"
+            f"off {c.get('snaps_off_home') or '—'}  \n"
+            f"def {c.get('snaps_def_home') or '—'}"
+        )
         if c.get("u_top_rushers_home") or c.get("u_top_rushers_away"):
             st.caption(
                 f"PFR rushers — {away}: {c.get('u_top_rushers_away') or '—'} · "

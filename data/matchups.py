@@ -7,7 +7,7 @@ from typing import Any
 import polars as pl
 
 from data.nfelo import load_elo_snapshot, load_nfelo_games
-from data.personnel import injury_flags, key_injuries, ol_dl_starters
+from data.personnel import injury_flags, key_injuries, last_week_snaps, ol_dl_starters
 from data.schedules import current_week as sched_current_week
 from data.schedules import load_schedules
 from data.team_form import (
@@ -177,6 +177,28 @@ def _ol_line(starters: pl.DataFrame, team: str, unit: str) -> str:
     rest = [by_pos[p] for p in by_pos if p not in order] + extras
     return " · ".join(ordered + rest) or "—"
 
+
+def _snap_line(snaps: pl.DataFrame, team: str, side: str) -> str:
+    if snaps is None or snaps.is_empty() or "team" not in snaps.columns:
+        return ""
+    sub = snaps.filter(pl.col("team") == team)
+    if sub.is_empty():
+        return ""
+    pct_col = "offense_pct" if side == "off" else "defense_pct"
+    if pct_col not in sub.columns:
+        return ""
+    ranked = sub.sort(pct_col, descending=True).head(6)
+    parts = []
+    for r in ranked.to_dicts():
+        name = str(r.get("player") or "").split(" ")[-1]
+        pct = r.get(pct_col)
+        if pct is None or not name:
+            continue
+        n = float(pct)
+        if n <= 1.5:
+            n *= 100.0
+        parts.append(f"{name} {n:.0f}%")
+    return " · ".join(parts)
 
 def _inj_text(inj: pl.DataFrame, team: str) -> str:
     if inj is None or inj.is_empty() or "team" not in inj.columns:
@@ -368,6 +390,7 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
     weather = _safe(lambda: weather_for_games(week_games), pl.DataFrame())
     inj = _safe(lambda: key_injuries(season, week, teams), pl.DataFrame())
     starters = _safe(lambda: ol_dl_starters(season, teams), pl.DataFrame())
+    snaps = _safe(lambda: last_week_snaps(season, week, teams), pl.DataFrame())
     press = _safe(lambda: team_pressure(season), pl.DataFrame())
     ngs = _safe(lambda: team_ngs(season), pl.DataFrame())
     press_team = _agg_by_team(
@@ -442,6 +465,10 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
                 "ol_away": _ol_line(starters, away, "ol"),
                 "dl_home": _ol_line(starters, home, "dl"),
                 "dl_away": _ol_line(starters, away, "dl"),
+                "snaps_off_home": _snap_line(snaps, home, "off"),
+                "snaps_off_away": _snap_line(snaps, away, "off"),
+                "snaps_def_home": _snap_line(snaps, home, "def"),
+                "snaps_def_away": _snap_line(snaps, away, "def"),
                 "nfelo_home": _num(h_elo, "nfelo"),
                 "nfelo_away": _num(a_elo, "nfelo"),
                 "pts_vs_avg_home": _num(h_elo, "pts_vs_avg"),
