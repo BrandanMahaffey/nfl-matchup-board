@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=NFL Board
+Comment=Weekly NFL matchup board
+Exec=/home/bmahaffey/projects/nfl-matchup-board/scripts/nfl-board
+Icon=nfl-board
+Terminal=false
+StartupNotify=true
+Categories=Utility;Sports;
+Keywords=nfl;board;stats;matchup;football;

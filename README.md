@@ -14,7 +14,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-On Omarchy, Super+Space → **NFL Matchup Board** starts the local server and opens it as a web app (`scripts/hafstats`).
+On Omarchy, Super+Space → **NFL Board** starts the local server and opens it as a web app (`scripts/nfl-board`).
 
 ## Streamlit Community Cloud (private family invite)
 

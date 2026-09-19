@@ -8,7 +8,7 @@ import streamlit as st
 
 from data.matchups import available_weeks, board_table, build_week_board, current_week, format_spread
 
-_ICON = Path(__file__).with_name("assets") / "hafstats.png"
+_ICON = Path(__file__).with_name("assets") / "nfl-board.png"
 st.set_page_config(
     page_title="NFL Matchup Board",
     page_icon=str(_ICON) if _ICON.exists() else "🏈",
