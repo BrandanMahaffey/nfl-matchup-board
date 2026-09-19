@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Start the local Hafstats Streamlit app if needed, then open it as a web app.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+PORT="${HAFSTATS_PORT:-8501}"
+URL="http://127.0.0.1:${PORT}"
+STREAMLIT="${ROOT}/.venv/bin/streamlit"
+LOG="${XDG_STATE_HOME:-$HOME/.local/state}/hafstats/server.log"
+PIDFILE="${XDG_STATE_HOME:-$HOME/.local/state}/hafstats/server.pid"
+
+health() {
+  curl -sf --max-time 1 "${URL}/_stcore/health" >/dev/null 2>&1
+}
+
+if ! health; then
+  if [[ ! -x $STREAMLIT ]]; then
+    notify-send "Hafstats" "Streamlit is missing. Run: cd ${ROOT} && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt" 2>/dev/null || true
+    echo "Missing ${STREAMLIT}" >&2
+    exit 1
+  fi
+  mkdir -p "$(dirname "$LOG")"
+  if [[ -f $PIDFILE ]] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    :
+  else
+    nohup "$STREAMLIT" run "${ROOT}/app.py" \
+      --server.headless true \
+      --server.port "$PORT" \
+      --browser.gatherUsageStats false \
+      >>"$LOG" 2>&1 &
+    echo $! >"$PIDFILE"
+  fi
+  for _ in $(seq 1 60); do
+    health && break
+    sleep 0.4
+  done
+  if ! health; then
+    notify-send "Hafstats" "Server did not start. See ${LOG}" 2>/dev/null || true
+    echo "Hafstats did not become ready. Log: ${LOG}" >&2
+    exit 1
+  fi
+fi
+
+if command -v omarchy-launch-webapp >/dev/null 2>&1; then
+  exec omarchy-launch-webapp "$URL"
+fi
+exec xdg-open "$URL"

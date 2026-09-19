@@ -2,11 +2,19 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import streamlit as st
 
 from data.matchups import available_weeks, board_table, build_week_board, current_week, format_spread
 
-st.set_page_config(page_title="NFL Matchup Board", layout="wide")
+_ICON = Path(__file__).with_name("assets") / "hafstats.png"
+st.set_page_config(
+    page_title="Hafstats",
+    page_icon=str(_ICON) if _ICON.exists() else "🏈",
+    layout="wide",
+    menu_items={"About": "Hafstats — weekly NFL matchup board. Built with Streamlit."},
+)
 
 
 def _fmt(val, digits=1, signed=False, suffix=""):
@@ -160,7 +168,7 @@ def render_card(c: dict):
 
 
 def main():
-    st.title("NFL Matchup Board")
+    st.title("Hafstats")
     st.caption(
         "Join-first weekly board · nflverse + PFR pressure + NGS + nfelo (else moneyline) + outdoor weather. "
         "Context for the pool, not predicted scores."

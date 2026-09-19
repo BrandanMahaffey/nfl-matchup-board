@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Hafstats
+Comment=Weekly NFL matchup board
+Exec=/home/bmahaffey/projects/nfl-matchup-board/scripts/hafstats
+Icon=hafstats
+Terminal=false
+StartupNotify=true
+Categories=Sports;
+Keywords=hafstats;nfl;stats;matchup;football;
