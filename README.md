@@ -1,4 +1,4 @@
-# Hafstats
+# NFL Matchup Board
 
 Weekly football-pool comparison board. One join per game: nflverse team form, injuries, last-week snaps, OL/DL depth, PFR pressure, NGS, nfelo (or moneyline), and outdoor weather.
 
@@ -14,7 +14,7 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-On Omarchy, Super+Space → **Hafstats** starts the local server and opens it as a web app (`scripts/hafstats`).
+On Omarchy, Super+Space → **NFL Matchup Board** starts the local server and opens it as a web app (`scripts/hafstats`).
 
 ## Streamlit Community Cloud (private family invite)
 

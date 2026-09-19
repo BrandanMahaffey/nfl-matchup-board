@@ -10,10 +10,10 @@ from data.matchups import available_weeks, board_table, build_week_board, curren
 
 _ICON = Path(__file__).with_name("assets") / "hafstats.png"
 st.set_page_config(
-    page_title="Hafstats",
+    page_title="NFL Matchup Board",
     page_icon=str(_ICON) if _ICON.exists() else "🏈",
     layout="wide",
-    menu_items={"About": "Hafstats — weekly NFL matchup board. Built with Streamlit."},
+    menu_items={"About": "NFL Matchup Board — weekly pool comparison. Built with Streamlit."},
 )
 
 
@@ -168,7 +168,7 @@ def render_card(c: dict):
 
 
 def main():
-    st.title("Hafstats")
+    st.title("NFL Matchup Board")
     st.caption(
         "Join-first weekly board · nflverse + PFR pressure + NGS + nfelo (else moneyline) + outdoor weather. "
         "Context for the pool, not predicted scores."
