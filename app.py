@@ -154,9 +154,9 @@ def _num(val):
         return None
 
 
-def _grid_height(rows: int, cap: int = 760) -> int:
-    """Size the grid to its rows so it never opens as a short scroll window."""
-    return min(cap, 35 * max(rows, 1) + 42)
+def _grid_height(rows: int, cap: int = 760) -> int | str:
+    """Fit the grid to its rows, scrolling internally only once it would run long."""
+    return "content" if 35 * max(rows, 1) + 43 <= cap else cap
 
 
 def _nan(val):
@@ -197,17 +197,21 @@ GLOSSARY = [
 ]
 
 
+def _glossary_body() -> None:
+    items = "".join(
+        f"<div><b>{html.escape(term)}</b> — {html.escape(text)}</div>"
+        for term, text in GLOSSARY
+    )
+    st.markdown(f'<div class="glossary">{items}</div>', unsafe_allow_html=True)
+    st.caption(
+        "Sources: nflverse play-by-play, injuries and depth charts · PFF pressure data · "
+        "Next Gen Stats · nfelo ratings · Open-Meteo forecasts. Data is cached for an hour."
+    )
+
+
 def _render_glossary() -> None:
     with st.expander("What the numbers mean"):
-        items = "".join(
-            f"<div><b>{html.escape(term)}</b> — {html.escape(text)}</div>"
-            for term, text in GLOSSARY
-        )
-        st.markdown(f'<div class="glossary">{items}</div>', unsafe_allow_html=True)
-        st.caption(
-            "Sources: nflverse play-by-play, injuries and depth charts · PFF pressure data · "
-            "Next Gen Stats · nfelo ratings · Open-Meteo forecasts. Data is cached for an hour."
-        )
+        _glossary_body()
 
 
 # --------------------------------------------------------------------------- shared bits
@@ -293,8 +297,6 @@ def _board_summary(cards: list[dict]) -> str:
 
 def _render_board(cards: list[dict], season: int, week: int) -> None:
     show_score = any(c.get("home_score") is not None and c.get("away_score") is not None for c in cards)
-    st.markdown(_board_summary(cards), unsafe_allow_html=True)
-
     config = {
         "Kickoff": st.column_config.TextColumn("Kickoff", help="Kickoff in Pacific time", width=110),
         "Matchup": st.column_config.TextColumn("Matchup", help="Away team at home team", width=120),
@@ -335,10 +337,8 @@ def _render_board(cards: list[dict], season: int, week: int) -> None:
     if picked:
         game_id = cards[picked[0]].get("game_id")
         if game_id:
-            _set_view(season, week, game_id, page="week")
+            _set_view(season, week, game_id)
             st.rerun()
-
-    _render_glossary()
 
 
 # --------------------------------------------------------------------------- comparison bars
@@ -395,7 +395,7 @@ _GROUPS: list[tuple[str, list[Metric]]] = [
         "Special teams",
         [
             Metric("FG%", "u_fg_home", "u_fg_away", 1, True, "Field goal percentage", "%", 100.0),
-            Metric("Punt net yds/g", "u_punt_net_home", "u_punt_net_away", 0, True, "Net punting yards per game"),
+            Metric("Net punt avg", "u_punt_net_home", "u_punt_net_away", 1, True, "Net yards per punt: gross distance minus return yards", " yds"),
             Metric("ST TDs", "u_st_tds_home", "u_st_tds_away", 0, True, "Special teams touchdowns this season"),
         ],
     ),
@@ -449,7 +449,9 @@ def _has_unit_data(card: dict) -> bool:
 def _cmp_panel(title: str, metrics: list[Metric], card: dict, colors: tuple[str, str], footer: str = "") -> str:
     if not _has_values(metrics, card):
         return ""
-    rows = "".join(_cmp_row(m, card, colors) for m in metrics)
+    rows = "".join(
+        _cmp_row(m, card, colors) for m in metrics if _has_values([m], card)
+    )
     foot = f'<div class="foot">{html.escape(footer)}</div>' if footer else ""
     return f'<div class="panel"><div class="panel-h">{html.escape(title)}</div><div class="cmp">{rows}</div>{foot}</div>'
 
@@ -683,72 +685,112 @@ def render_injuries(c: dict) -> None:
 # --------------------------------------------------------------------------- league pages
 
 
-def _render_teams_page(season: int, week: int) -> None:
-    rows = _league_teams(season, week)
-    if not rows:
-        st.info("No team-week stats published for this season yet.")
-        return
+_CONFERENCES = ["All teams", "AFC", "NFC"]
 
-    st.markdown(f"#### Team form through week {max(week - 1, 0)}")
-    groups = ["All teams", "AFC", "NFC"]
-    scope = st.segmented_control("Conference", groups, default="All teams", label_visibility="collapsed") or "All teams"
 
-    ranks = {r["Team"]: i for i, r in enumerate(rows, start=1)}
+def _league_table(season: int, week: int, scope: str) -> list[dict]:
+    """One row per team carrying every league-level number the tabs can show."""
     table = []
-    for r in rows:
+    for rank, r in enumerate(_league_teams(season, week), start=1):
         team = r["Team"]
         if scope != "All teams" and not division(team).startswith(scope):
             continue
-        fg = _num(r.get("FG%"))
+        off, allowed = _num(r.get("Off EPA/g")), _num(r.get("Def EPA/g"))
         table.append(
             {
-                "Rk": ranks[team],
+                "Rk": rank,
                 "Team": team,
                 "Club": team_name(team),
                 "Division": division(team),
                 "nfelo": _nan(r.get("nfelo")),
-                "Off EPA/g": _nan(r.get("Off EPA/g")),
-                "Def EPA/g": _nan(r.get("Def EPA/g")),
+                "Pts vs avg": _nan(r.get("Pts vs avg")),
+                "Off EPA/g": _nan(off),
+                "Def EPA/g": _nan(allowed),
+                "Net EPA/g": nan if off is None or allowed is None else off - allowed,
                 "PF/g": _nan(r.get("PF/g")),
                 "PA/g": _nan(r.get("PA/g")),
                 "TO": _nan(r.get("TO")),
                 "CPOE": _nan(r.get("CPOE")),
-                "FG%": nan if fg is None else fg * 100.0,
                 "G": _nan(r.get("Games")),
             }
         )
+    return table
+
+
+def _team_config(elos: list[float]) -> dict:
+    lo, hi = (min(elos), max(elos)) if elos else (1300.0, 1700.0)
+    return {
+        "Rk": st.column_config.NumberColumn("Rk", help="League rank by nfelo rating", format="%.0f", width=50),
+        "Team": st.column_config.TextColumn("Team", width=70),
+        "Club": st.column_config.TextColumn("Club", width="medium"),
+        "Division": st.column_config.TextColumn("Division", width=110),
+        "nfelo": st.column_config.ProgressColumn(
+            "nfelo", help="Elo-style power rating; about 1500 is league average.",
+            format="%.0f", min_value=lo - 15, max_value=hi + 5, width=140,
+        ),
+        "Pts vs avg": st.column_config.NumberColumn(
+            "Pts vs avg",
+            help="Points nfelo expects this team to beat an average opponent by on a neutral field.",
+            format="%+.1f", width=105,
+        ),
+        "Off EPA/g": st.column_config.NumberColumn("Off EPA/g", help="Offensive expected points added per game — higher is better.", format="%.1f", width=100),
+        "Def EPA/g": st.column_config.NumberColumn("Def EPA/g", help="Expected points allowed per game — lower is better.", format="%.1f", width=100),
+        "Net EPA/g": st.column_config.NumberColumn("Net EPA/g", help="Offensive EPA per game minus defensive EPA allowed per game — overall efficiency.", format="%+.1f", width=100),
+        "PF/g": st.column_config.NumberColumn("PF/g", help="Points scored per game", format="%.1f", width=75),
+        "PA/g": st.column_config.NumberColumn("PA/g", help="Points allowed per game", format="%.1f", width=75),
+        "TO": st.column_config.NumberColumn("TO", help="Season turnover margin: takeaways minus giveaways", format="%+.0f", width=70),
+        "CPOE": st.column_config.NumberColumn("CPOE", help="Completion percentage over expected", format="%.1f", width=80),
+        "G": st.column_config.NumberColumn("G", help="Games played", format="%.0f", width=55),
+    }
+
+
+def _render_team_grid(
+    season: int, week: int, *, columns: list[str], key: str, sort_by: str | None, caption: str
+) -> None:
+    if not _league_teams(season, week):
+        st.info("No team-week stats published for this season yet.")
+        return
+    st.markdown(f"#### Season to date, through week {max(week - 1, 0)}")
+    scope = st.segmented_control(
+        "Conference", _CONFERENCES, default="All teams", label_visibility="collapsed", key=key
+    ) or "All teams"
+    table = _league_table(season, week, scope)
     if not table:
         st.info("No teams match that filter.")
         return
-
-    elos = [t["nfelo"] for t in table if t["nfelo"] == t["nfelo"]]
-    lo, hi = (min(elos), max(elos)) if elos else (1300.0, 1700.0)
+    if sort_by:
+        table.sort(key=lambda r: -r[sort_by] if r[sort_by] == r[sort_by] else float("inf"))
+    config = _team_config([t["nfelo"] for t in table if t["nfelo"] == t["nfelo"]])
     st.dataframe(
-        table,
+        [{c: t[c] for c in columns} for t in table],
         hide_index=True,
         width="stretch",
         height=_grid_height(len(table), cap=1240),
-        column_config={
-            "Rk": st.column_config.NumberColumn("Rk", help="League rank by nfelo rating", format="%.0f", width=50),
-            "Team": st.column_config.TextColumn("Team", width=70),
-            "Club": st.column_config.TextColumn("Club", width="medium"),
-            "Division": st.column_config.TextColumn("Division", width=110),
-            "nfelo": st.column_config.ProgressColumn(
-                "nfelo", help="Elo-style power rating; about 1500 is league average.",
-                format="%.0f", min_value=lo - 15, max_value=hi + 5, width=140,
-            ),
-            "Off EPA/g": st.column_config.NumberColumn("Off EPA/g", help="Offensive expected points added per game — higher is better.", format="%.1f", width=100),
-            "Def EPA/g": st.column_config.NumberColumn("Def EPA/g", help="Expected points allowed per game — lower is better.", format="%.1f", width=100),
-            "PF/g": st.column_config.NumberColumn("PF/g", help="Points scored per game", format="%.1f", width=75),
-            "PA/g": st.column_config.NumberColumn("PA/g", help="Points allowed per game", format="%.1f", width=75),
-            "TO": st.column_config.NumberColumn("TO", help="Season turnover margin: takeaways minus giveaways", format="%+.0f", width=70),
-            "CPOE": st.column_config.NumberColumn("CPOE", help="Completion percentage over expected", format="%.1f", width=80),
-            "FG%": st.column_config.NumberColumn("FG%", help="Field goal percentage", format="%.0f%%", width=75),
-            "G": st.column_config.NumberColumn("G", help="Games played", format="%.0f", width=55),
-        },
+        column_config={c: config[c] for c in columns},
     )
-    st.caption("Season to date, sorted by nfelo. Click any column header to re-sort.")
-    _render_glossary()
+    st.caption(caption)
+
+
+def _render_power_ratings(season: int, week: int) -> None:
+    _render_team_grid(
+        season,
+        week,
+        columns=["Rk", "Team", "Club", "Division", "nfelo", "Pts vs avg", "PF/g", "PA/g", "TO", "G"],
+        key="scope_power",
+        sort_by=None,
+        caption="nfelo power ratings, strongest first. Click any column header to re-sort.",
+    )
+
+
+def _render_team_stats(season: int, week: int) -> None:
+    _render_team_grid(
+        season,
+        week,
+        columns=["Team", "Club", "Division", "Off EPA/g", "Def EPA/g", "Net EPA/g", "PF/g", "PA/g", "CPOE", "TO", "G"],
+        key="scope_stats",
+        sort_by="Net EPA/g",
+        caption="nflverse play-by-play efficiency, best net EPA first. Click any column header to re-sort.",
+    )
 
 
 def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
@@ -766,13 +808,16 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
     f1, f2, f3 = st.columns([2.2, 2.8, 1.6], vertical_alignment="bottom")
     with f1:
         picked_status = st.segmented_control(
-            "Status", statuses, default=statuses, selection_mode="multi", label_visibility="collapsed"
+            "Status", statuses, default=statuses, selection_mode="multi",
+            label_visibility="collapsed", key="inj_status",
         ) or statuses
     with f2:
         teams = sorted({r.get("team") for r in rows if r.get("team")})
-        picked_teams = st.multiselect("Teams", teams, placeholder="All teams", label_visibility="collapsed")
+        picked_teams = st.multiselect(
+            "Teams", teams, placeholder="All teams", label_visibility="collapsed", key="inj_teams"
+        )
     with f3:
-        starters_only = st.toggle("Starters only")
+        starters_only = st.toggle("Starters only", key="inj_starters")
 
     filtered = [
         r
@@ -813,8 +858,8 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
 # --------------------------------------------------------------------------- routing
 
 
-def _set_view(season: int, week: int, game: str | None = None, view: str | None = None, page: str | None = None) -> None:
-    params = {"season": str(season), "week": str(week), "page": page or "week"}
+def _set_view(season: int, week: int, game: str | None = None, view: str | None = None) -> None:
+    params = {"season": str(season), "week": str(week)}
     if game:
         params["game"] = game
     if view:
@@ -825,12 +870,47 @@ def _set_view(season: int, week: int, game: str | None = None, view: str | None 
 
 def _back_to_board(season: int, week: int) -> None:
     st.session_state["board_nonce"] = st.session_state.get("board_nonce", 0) + 1
-    _set_view(season, week, page="week")
+    _set_view(season, week)
     st.rerun()
 
 
-_PAGES = {"Week board": "week", "Teams": "teams", "Injuries": "injuries"}
-_PAGE_IDS = {v: k for k, v in _PAGES.items()}
+def _render_hub(cards: list[dict], season: int, week: int) -> None:
+    """The week's games and the league-wide reference tables, all on one page."""
+    if cards:
+        st.markdown(_board_summary(cards), unsafe_allow_html=True)
+    board, power, stats, injuries, glossary = st.tabs(
+        ["Matchups", "Power ratings", "Team stats", "Injury report", "What the numbers mean"]
+    )
+    with board:
+        if cards:
+            _render_board(cards, season, week)
+        else:
+            st.warning("No games scheduled for that week.")
+    with power:
+        _render_power_ratings(season, week)
+    with stats:
+        _render_team_stats(season, week)
+    with injuries:
+        _render_league_injuries(cards, season, week)
+    with glossary:
+        _glossary_body()
+
+
+def _render_game(c: dict, season: int, week: int) -> None:
+    back_col, tab_col = st.columns([1.1, 5], vertical_alignment="center")
+    if back_col.button("← Back to board", width="stretch"):
+        _back_to_board(season, week)
+    with tab_col:
+        section = st.segmented_control(
+            "Section",
+            ["Matchup", "Injuries"],
+            default="Injuries" if st.query_params.get("view") == "injuries" else "Matchup",
+            label_visibility="collapsed",
+        ) or "Matchup"
+    if section == "Injuries":
+        render_injuries(c)
+    else:
+        render_matchup(c)
 
 
 def main() -> None:
@@ -842,19 +922,14 @@ def main() -> None:
         qp_season = 2026
     if qp_season not in seasons:
         qp_season = 2026
-    qp_page = _PAGE_IDS.get(str(qp.get("page", "week")), "Week board")
 
-    title_col, nav_col, season_col, week_col = st.columns([4.4, 3.0, 1.1, 1.1], vertical_alignment="bottom")
+    title_col, season_col, week_col = st.columns([6.8, 1.1, 1.1], vertical_alignment="bottom")
     with title_col:
         st.markdown(
             '<div class="masthead"><div class="rule"></div><h1>NFL Matchup Board</h1></div>'
             '<div class="sub">Context for the pool — not predicted scores.</div>',
             unsafe_allow_html=True,
         )
-    with nav_col:
-        page = st.segmented_control(
-            "Page", list(_PAGES), default=qp_page, label_visibility="collapsed"
-        ) or qp_page
     with season_col:
         season = st.selectbox("Season", seasons, index=seasons.index(qp_season))
     try:
@@ -871,11 +946,8 @@ def main() -> None:
     with week_col:
         week = st.selectbox("Week", weeks, index=weeks.index(qp_week))
 
-    page_id = _PAGES[page]
-    same_scope = str(season) == str(qp.get("season", "")) and str(week) == str(qp.get("week", ""))
-    if not same_scope or page_id != str(qp.get("page", "week") or "week"):
-        keep = qp.get("game") if same_scope and page_id == "week" else None
-        _set_view(season, week, keep, qp.get("view") if keep else None, page=page_id)
+    if str(season) != str(qp.get("season", "")) or str(week) != str(qp.get("week", "")):
+        _set_view(season, week)
         st.rerun()
 
     try:
@@ -885,35 +957,11 @@ def main() -> None:
         st.exception(exc)
         return
 
-    if page_id == "teams":
-        _render_teams_page(season, week)
-        return
-    if not cards:
-        st.warning("No games scheduled for that week.")
-        return
-    if page_id == "injuries":
-        _render_league_injuries(cards, season, week)
-        return
-
     selected = {c.get("game_id"): c for c in cards}.get(qp.get("game"))
-    if not selected:
-        _render_board(cards, season, week)
-        return
-
-    back_col, tab_col = st.columns([1.1, 5], vertical_alignment="center")
-    if back_col.button("← Week board", width="stretch"):
-        _back_to_board(season, week)
-    with tab_col:
-        section = st.segmented_control(
-            "Section",
-            ["Matchup", "Injuries"],
-            default="Injuries" if qp.get("view") == "injuries" else "Matchup",
-            label_visibility="collapsed",
-        ) or "Matchup"
-    if section == "Injuries":
-        render_injuries(selected)
+    if selected:
+        _render_game(selected, season, week)
     else:
-        render_matchup(selected)
+        _render_hub(cards, season, week)
 
 
 if __name__ == "__main__":

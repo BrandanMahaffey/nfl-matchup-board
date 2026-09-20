@@ -181,8 +181,8 @@ def _unit_block(home: dict, away: dict, press_h: dict, press_a: dict, ngs_h: dic
     a_st = _num(away, "special_teams_tds")
     h_fg = _num(home, "fg_pct")
     a_fg = _num(away, "fg_pct")
-    h_net = _num(home, "pt_net_yards")
-    a_net = _num(away, "pt_net_yards")
+    h_net = _num(home, "punt_net_avg")
+    a_net = _num(away, "punt_net_avg")
 
     pass_h = None if h_pass is None or a_pass_d is None else h_pass - a_pass_d
     pass_a = None if a_pass is None or h_pass_d is None else a_pass - h_pass_d
@@ -481,13 +481,13 @@ def league_team_rows(season: int, week: int) -> list[dict[str, Any]]:
             {
                 "Team": team,
                 "nfelo": _num(e, "nfelo"),
+                "Pts vs avg": _num(e, "pts_vs_avg"),
                 "Off EPA/g": _pg(r, "off_epa", pg_key="off_epa_pg"),
                 "Def EPA/g": _pg(r, "def_epa_allowed", pg_key="def_epa_pg"),
                 "PF/g": _pg(r, "points_for", pg_key="points_for_pg"),
                 "PA/g": _pg(r, "points_against", pg_key="points_against_pg"),
                 "TO": _num(r, "to_diff"),
                 "CPOE": _num(r, "passing_cpoe"),
-                "FG%": _num(r, "fg_pct"),
                 "Games": _num(r, "games"),
             }
         )

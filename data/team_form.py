@@ -31,6 +31,7 @@ _GAME_OUTPUT_COLS = [
     "special_teams_tds",
     "fg_pct",
     "pt_net_yards",
+    "pt_att",
     "punt_return_yards",
     "kickoff_return_yards",
     "passing_cpoe",
@@ -62,7 +63,7 @@ _SEASON_TOTAL_COLS = [
     "def_sacks",
     "special_teams_tds",
     "fg_pct",
-    "pt_net_yards",
+    "punt_net_avg",
     "passing_cpoe",
 ]
 
@@ -102,6 +103,7 @@ def annotate_defense_and_scoring(
         "special_teams_tds",
         "fg_pct",
         "pt_net_yards",
+        "pt_att",
         "punt_return_yards",
         "kickoff_return_yards",
         "passing_cpoe",
@@ -188,7 +190,8 @@ def _aggregate_team_stats(rows: pl.DataFrame) -> pl.DataFrame:
         pl.col("def_sacks").sum(),
         pl.col("special_teams_tds").sum(),
         pl.col("fg_pct").mean().alias("fg_pct"),
-        pl.col("pt_net_yards").mean().alias("pt_net_yards"),
+        pl.col("pt_net_yards").sum().alias("pt_net_yards"),
+        pl.col("pt_att").sum().alias("pt_att"),
         pl.col("passing_cpoe").mean().alias("passing_cpoe"),
     )
 
@@ -201,6 +204,11 @@ def _aggregate_team_stats(rows: pl.DataFrame) -> pl.DataFrame:
         (pl.col("rush_epa_allowed") / pl.col("games")).alias("rush_epa_allowed_pg"),
         (pl.col("points_for") / pl.col("games")).alias("points_for_pg"),
         (pl.col("points_against") / pl.col("games")).alias("points_against_pg"),
+        # Yards per punt, not per game: punting a lot is a sign of a stalled offense.
+        pl.when(pl.col("pt_att") > 0)
+        .then(pl.col("pt_net_yards") / pl.col("pt_att"))
+        .otherwise(None)
+        .alias("punt_net_avg"),
     ).select(_SEASON_TOTAL_COLS)
 
 

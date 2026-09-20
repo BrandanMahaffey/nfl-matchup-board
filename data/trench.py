@@ -5,6 +5,7 @@ from __future__ import annotations
 import polars as pl
 
 from data.io import load_csv
+from data.teamref import canonical
 
 
 RELEASE = "https://github.com/nflverse/nflverse-data/releases/download"
@@ -139,7 +140,12 @@ def team_ngs(season: int) -> pl.DataFrame:
             return df
         if "team" not in df.columns and "team_abbr" in df.columns:
             df = df.rename({"team_abbr": "team"})
-        return df
+        if "team" not in df.columns:
+            return df
+        # Next Gen Stats still ships LAR where the schedule says LA.
+        return df.with_columns(
+            pl.col("team").cast(pl.Utf8).map_elements(canonical, return_dtype=pl.Utf8)
+        )
 
     def _f64(df: pl.DataFrame, *cols: str) -> pl.DataFrame:
         present = [c for c in cols if c in df.columns]

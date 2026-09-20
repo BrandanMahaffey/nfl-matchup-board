@@ -5,20 +5,33 @@ from __future__ import annotations
 import polars as pl
 
 from data.io import load_csv
+from data.teamref import canonical
 
 ELO_URL = "https://raw.githubusercontent.com/greerreNFL/nfelo/main/output_data/elo_snapshot.csv"
 GAMES_URL = (
     "https://raw.githubusercontent.com/greerreNFL/nfelo/main/output_data/nfelo_games.csv"
 )
 
-_TEAM_ALIAS = {"OAK": "LV"}
-
-
 def _alias_team(value: object) -> str | None:
     if value is None:
         return None
+    return canonical(str(value))
+
+
+def _alias_game_id(value: object) -> str | None:
+    """Rewrite the away/home codes inside ``season_week_away_home`` game ids.
+
+    nfelo still publishes historical franchise codes (LAR, OAK), so ids would
+    otherwise never match the nflverse schedule.
+    """
+    if value is None:
+        return None
     text = str(value).strip()
-    return _TEAM_ALIAS.get(text, text)
+    parts = text.split("_")
+    if len(parts) != 4:
+        return text
+    season, week, away, home = parts
+    return "_".join((season, week, canonical(away), canonical(home)))
 
 
 def _empty_elo_snapshot() -> pl.DataFrame:
@@ -88,7 +101,9 @@ def load_nfelo_games(season: int) -> pl.DataFrame:
         return _empty_nfelo_games()
 
     prefix = f"{season}_"
-    df = df.filter(pl.col("game_id").cast(pl.Utf8).str.starts_with(prefix))
+    df = df.with_columns(
+        pl.col("game_id").map_elements(_alias_game_id, return_dtype=pl.Utf8)
+    ).filter(pl.col("game_id").str.starts_with(prefix))
 
     if df.is_empty():
         return _empty_nfelo_games()
