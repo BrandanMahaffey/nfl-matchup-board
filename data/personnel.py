@@ -331,6 +331,29 @@ def injury_records(
     return rows
 
 
+
+def injury_status_counts(records: list[dict]) -> dict[str, int]:
+    out = doubtful = questionable = 0
+    for row in records or []:
+        status = row.get("status")
+        if status == "out":
+            out += 1
+        elif status == "doubtful":
+            doubtful += 1
+        elif status == "questionable":
+            questionable += 1
+    return {"out": out, "doubtful": doubtful, "questionable": questionable}
+
+
+def injury_count_label(records: list[dict]) -> str:
+    """Compact OUT / Q counts so the board is never a blank dash."""
+    counts = injury_status_counts(records)
+    parts = [f"{counts['out']} OUT", f"{counts['questionable']} Q"]
+    if counts["doubtful"]:
+        parts.insert(1, f"{counts['doubtful']} D")
+    return " · ".join(parts)
+
+
 def starter_out_line(records: list[dict]) -> str:
     """Readable last-name list of starters listed as out."""
     names = [_last_name(r["player"]) for r in records if r.get("is_starter") and r.get("status") == "out"]

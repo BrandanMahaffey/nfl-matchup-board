@@ -8,6 +8,7 @@ import polars as pl
 
 from data.nfelo import load_elo_snapshot, load_nfelo_games
 from data.personnel import (
+    injury_count_label,
     injury_flags,
     injury_records,
     key_injuries,
@@ -512,6 +513,8 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
                 "injuries_away": _inj_text(inj, away),
                 "injuries_out_home": starter_out_line(inj_home_rows),
                 "injuries_out_away": starter_out_line(inj_away_rows),
+                "injuries_count_home": injury_count_label(inj_home_rows),
+                "injuries_count_away": injury_count_label(inj_away_rows),
                 "injuries_home_rows": inj_home_rows,
                 "injuries_away_rows": inj_away_rows,
                 "ol_home": _ol_line(starters, home, "ol"),
@@ -584,3 +587,30 @@ def board_table(cards: list[dict[str, Any]]) -> pl.DataFrame:
             }
         )
     return pl.DataFrame(rows) if rows else pl.DataFrame()
+
+def league_team_rows(season: int, week: int) -> list[dict[str, Any]]:
+    """Season-to-date team form through the week before ``week``."""
+    season_df, _recent = _prep_form(season, week)
+    elo = _safe(load_elo_snapshot, pl.DataFrame())
+    if season_df is None or season_df.is_empty():
+        return []
+    rows = []
+    for r in season_df.to_dicts():
+        team = r.get("team")
+        e = _row(elo, team) if elo is not None else {}
+        rows.append(
+            {
+                "Team": team,
+                "nfelo": _num(e, "nfelo"),
+                "Off EPA/g": _pg(r, "off_epa", pg_key="off_epa_pg"),
+                "Def EPA/g": _pg(r, "def_epa_allowed", pg_key="def_epa_pg"),
+                "PF/g": _pg(r, "points_for", pg_key="points_for_pg"),
+                "PA/g": _pg(r, "points_against", pg_key="points_against_pg"),
+                "TO": _num(r, "to_diff"),
+                "CPOE": _num(r, "passing_cpoe"),
+                "FG%": _num(r, "fg_pct"),
+                "Games": _num(r, "games"),
+            }
+        )
+    rows.sort(key=lambda x: (-(x["nfelo"] or -1e9)))
+    return rows

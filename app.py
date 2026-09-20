@@ -7,7 +7,8 @@ from pathlib import Path
 
 import streamlit as st
 
-from data.matchups import available_weeks, build_week_board, current_week, format_spread
+from data.matchups import available_weeks, build_week_board, current_week, format_spread, league_team_rows
+from data.schedules import format_kickoff_pt
 
 _ICON = Path(__file__).with_name("assets") / "nfl-board.png"
 st.set_page_config(
@@ -69,13 +70,18 @@ def _pct(val):
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading nflverse / nfelo / weather…")
-def _cards(season: int, week: int):
+def _cards(season: int, week: int, _ver: int = 3):
     return build_week_board(season, week)
 
 
 @st.cache_data(ttl=3600)
 def _weeks(season: int):
     return available_weeks(season)
+
+
+@st.cache_data(ttl=3600)
+def _league_teams(season: int, week: int, _ver: int = 1):
+    return league_team_rows(season, week)
 
 
 def _unit_row(label, home_val, away_val, home, away, digits=1, unit_title=None):
@@ -170,14 +176,18 @@ def _weather_banner_parts(c: dict) -> list[str]:
 
 
 
-def _set_view(season: int, week: int, game: str | None = None, view: str | None = None) -> None:
-    params = {"season": str(season), "week": str(week)}
-    if game:
-        params["game"] = game
-    if view:
-        params["view"] = view
-    st.query_params.clear()
-    st.query_params.update(params)
+def _kickoff_label(c: dict) -> str:
+    when = (c.get("kickoff_pt") or "").strip()
+    if when:
+        return when
+    return format_kickoff_pt(c.get("gameday"), c.get("gametime")) or "—"
+
+
+def _inj_count_cell(c: dict) -> str:
+    away, home = c["away_team"], c["home_team"]
+    a = c.get("injuries_count_away") or "0 OUT · 0 Q"
+    h = c.get("injuries_count_home") or "0 OUT · 0 Q"
+    return f"{away} {a}\n{home} {h}"
 
 
 def render_injuries(c: dict):
@@ -202,7 +212,7 @@ def render_injuries(c: dict):
                 "Starter": "yes" if r.get("is_starter") else "",
             }
         )
-    st.caption("Board column is starters listed as OUT. This table is the full report (OUT / Doubtful / Questionable).")
+    st.caption("Full nflverse report for this game: OUT, Doubtful, and Questionable.")
     st.dataframe(table, hide_index=True, width="stretch")
     o1, o2 = st.columns(2)
     o1.markdown(f"**{away} starters out**  \n{c.get('injuries_out_away') or 'none'}")
@@ -214,7 +224,7 @@ def render_card(c: dict):
     meta = " · ".join(
         x
         for x in [
-            c.get("kickoff_pt") or "",
+            _kickoff_label(c),
             c.get("stadium") or "",
             c.get("venue") or "",
             f"QB {c.get('away_qb') or '—'} / {c.get('home_qb') or '—'}",
@@ -298,23 +308,10 @@ def render_card(c: dict):
     )
 
 
-def _render_game_chips(cards: list[dict], season: int, week: int, active: str | None) -> None:
-    per_row = 4
-    for i in range(0, len(cards), per_row):
-        cols = st.columns(per_row)
-        for j, c in enumerate(cards[i : i + per_row]):
-            gid = c.get("game_id") or ""
-            label = f"{c['away_team']} @ {c['home_team']}"
-            with cols[j]:
-                btn_type = "primary" if gid == active else "secondary"
-                if st.button(label, key=f"chip_{season}_{week}_{gid}", type=btn_type):
-                    _set_view(season, week, gid)
-                    st.rerun()
-
 
 def _render_board(cards: list[dict], season: int, week: int) -> None:
     show_score = any(c.get("home_score") is not None and c.get("away_score") is not None for c in cards)
-    widths = [1.1, 2.0, 0.9, 0.9, 0.8, 1.0, 2.2] if show_score else [1.1, 2.2, 0.9, 0.8, 1.0, 2.4]
+    widths = [1.35, 1.6, 0.8, 1.1, 1.0, 1.1, 1.8] if show_score else [1.35, 1.8, 1.1, 1.0, 1.1, 2.0]
     hdr = st.columns(widths)
     hdr[0].markdown("**When**")
     hdr[1].markdown("**Matchup**")
@@ -325,16 +322,16 @@ def _render_board(cards: list[dict], season: int, week: int) -> None:
     hdr[idx].markdown("**Spread**")
     hdr[idx + 1].markdown("**Win%**")
     hdr[idx + 2].markdown("**Venue**")
-    hdr[idx + 3].markdown("**Starters out**")
+    hdr[idx + 3].markdown("**Injuries**")
 
     for c in cards:
         home, away = c["home_team"], c["away_team"]
         gid = c.get("game_id") or ""
         cols = st.columns(widths)
-        cols[0].write(c.get("kickoff_pt") or "")
+        cols[0].markdown(_kickoff_label(c))
         with cols[1]:
             if st.button(f"{away} @ {home}", key=f"board_game_{season}_{week}_{gid}"):
-                _set_view(season, week, gid)
+                _set_view(season, week, gid, page="week")
                 st.rerun()
         col_i = 2
         if show_score:
@@ -347,20 +344,18 @@ def _render_board(cards: list[dict], season: int, week: int) -> None:
         src = c.get("win_pct_source") or "unknown"
         win = _pct(c.get("home_win_pct"))
         if c.get("home_win_pct") is not None:
-            win = f"{win} {html.escape(home)}"
+            win = f"{win}&nbsp;{html.escape(home)}"
         title = html.escape(f"Win% from {src}")
         cols[col_i + 1].markdown(
-            f'<span class="win" title="{title}">{html.escape(win)}</span>',
+            f'<span class="win" title="{title}" style="white-space:nowrap">{win}</span>',
             unsafe_allow_html=True,
         )
         cols[col_i + 2].write(_venue_text(c))
-        away_out = c.get("injuries_out_away") or "—"
-        home_out = c.get("injuries_out_home") or "—"
-        inj_label = f"{away}: {away_out} / {home}: {home_out}"
         with cols[col_i + 3]:
-            if st.button(inj_label, key=f"board_inj_{season}_{week}_{gid}"):
-                _set_view(season, week, gid, "injuries")
+            if st.button(_inj_count_cell(c), key=f"board_inj_{season}_{week}_{gid}"):
+                _set_view(season, week, gid, "injuries", page="week")
                 st.rerun()
+
 
 def _venue_text(c: dict) -> str:
     if c.get("venue") != "outdoor":
@@ -377,6 +372,68 @@ def _venue_text(c: dict) -> str:
     return " ".join(bits) or (c.get("weather_note") or "outdoor")
 
 
+def _set_view(season: int, week: int, game: str | None = None, view: str | None = None, page: str | None = None) -> None:
+    params = {"season": str(season), "week": str(week), "page": page or "week"}
+    if game:
+        params["game"] = game
+    if view:
+        params["view"] = view
+    st.query_params.clear()
+    st.query_params.update(params)
+
+
+def _render_teams_page(season: int, week: int) -> None:
+    st.subheader(f"Team form through week {max(week - 1, 0)}")
+    st.caption("Season-to-date nflverse EPA and scoring. Hover CPOE on the week board for the full name; here CPOE is completion percentage over expected.")
+    rows = _league_teams(season, week)
+    if not rows:
+        st.info("No team-week stats yet for this season.")
+        return
+    pretty = []
+    for r in rows:
+        pretty.append(
+            {
+                "Team": r["Team"],
+                "nfelo": _fmt(r.get("nfelo"), 0),
+                "Off EPA/g": _fmt(r.get("Off EPA/g")),
+                "Def EPA/g": _fmt(r.get("Def EPA/g")),
+                "PF/g": _fmt(r.get("PF/g")),
+                "PA/g": _fmt(r.get("PA/g")),
+                "TO": _fmt(r.get("TO"), 1, True),
+                "CPOE": _fmt(r.get("CPOE"), 1),
+                "FG%": _fmt(r.get("FG%"), 2),
+                "Games": _fmt(r.get("Games"), 0),
+            }
+        )
+    st.dataframe(pretty, hide_index=True, width="stretch")
+
+
+def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
+    st.subheader(f"Week {week} injury report")
+    st.caption("Every listed OUT / Doubtful / Questionable. Click a row’s team matchup on the week board for the game page.")
+    rows = []
+    for c in cards:
+        for r in list(c.get("injuries_away_rows") or []) + list(c.get("injuries_home_rows") or []):
+            status = {"out": "OUT", "doubtful": "Doubtful", "questionable": "Questionable"}.get(
+                r.get("status"), r.get("status") or ""
+            )
+            rows.append(
+                {
+                    "Team": r.get("team"),
+                    "Player": r.get("player"),
+                    "Pos": r.get("position") or "",
+                    "Status": status,
+                    "Injury": r.get("injury") or "",
+                    "Practice": r.get("practice") or "",
+                    "Starter": "yes" if r.get("is_starter") else "",
+                    "Game": f"{c['away_team']} @ {c['home_team']}",
+                }
+            )
+    if not rows:
+        st.info("No OUT / Doubtful / Questionable listings in the nflverse injury file for this week.")
+        return
+    st.dataframe(rows, hide_index=True, width="stretch")
+
 
 def main():
     qp = st.query_params
@@ -388,10 +445,17 @@ def main():
     if qp_season not in seasons:
         qp_season = 2026
 
-    title_col, season_col, week_col = st.columns([6, 1.15, 1.15])
+    pages = ["Week board", "Teams", "Injuries"]
+    page_key = {"week": "Week board", "teams": "Teams", "injuries": "Injuries"}
+    qp_page = page_key.get(str(qp.get("page", "week")), "Week board")
+
+    title_col, page_col, season_col, week_col = st.columns([4.2, 2.4, 1.1, 1.1])
     with title_col:
         st.title("NFL Matchup Board")
         st.caption("Context for the pool, not predicted scores.")
+    with page_col:
+        st.caption("Page")
+        page = st.radio("Page", pages, index=pages.index(qp_page), horizontal=True, label_visibility="collapsed")
     with season_col:
         st.caption("Season")
         season = st.selectbox("Season", seasons, index=seasons.index(qp_season), label_visibility="collapsed")
@@ -410,12 +474,13 @@ def main():
         st.caption("Week")
         week = st.selectbox("Week", weeks, index=weeks.index(qp_week), label_visibility="collapsed")
 
+    page_id = {"Week board": "week", "Teams": "teams", "Injuries": "injuries"}[page]
     url_season = str(qp.get("season", ""))
     url_week = str(qp.get("week", ""))
-    if str(season) != url_season or str(week) != url_week:
-        same_week = str(season) == url_season and str(week) == url_week
-        game_keep = qp.get("game") if same_week else None
-        _set_view(season, week, game_keep, qp.get("view") if game_keep else None)
+    url_page = str(qp.get("page", "week") or "week")
+    if str(season) != url_season or str(week) != url_week or page_id != url_page:
+        game_keep = qp.get("game") if str(season) == url_season and str(week) == url_week and page_id == "week" else None
+        _set_view(season, week, game_keep, qp.get("view") if game_keep else None, page=page_id)
         st.rerun()
 
     try:
@@ -428,20 +493,26 @@ def main():
         return
 
     by_id = {c.get("game_id"): c for c in cards}
-    game_id = qp.get("game")
+    game_id = qp.get("game") if page_id == "week" else None
     view = qp.get("view")
     selected = by_id.get(game_id)
+
+    if page_id == "teams":
+        _render_teams_page(season, week)
+        return
+    if page_id == "injuries":
+        _render_league_injuries(cards, season, week)
+        return
 
     if selected:
         back, _ = st.columns([1, 6])
         if back.button("← Week board"):
-            _set_view(season, week)
+            _set_view(season, week, page="week")
             st.rerun()
         title = f"{selected['away_team']} @ {selected['home_team']}"
         if selected.get("away_score") is not None and selected.get("home_score") is not None:
             title += f"  ({int(selected['away_score'])}–{int(selected['home_score'])})"
         st.subheader(title)
-        _render_game_chips(cards, season, week, selected.get("game_id"))
         which = st.radio(
             "section",
             ["Matchup", "Injuries"],
@@ -456,11 +527,10 @@ def main():
         return
 
     st.markdown(f"**{season} week {week}**")
-    _render_game_chips(cards, season, week, None)
     _render_board(cards, season, week)
     st.caption(
-        "Hover Win% for the source (nfelo or moneyline). "
-        "Use the matchup button for the card, or starters out for the injury report."
+        "When is kickoff in Pacific time. Injuries shows listed OUT and Questionable counts; "
+        "click for the full report. Hover Win% for nfelo vs moneyline."
     )
 
 
