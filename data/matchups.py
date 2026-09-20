@@ -7,9 +7,17 @@ from typing import Any
 import polars as pl
 
 from data.nfelo import load_elo_snapshot, load_nfelo_games
-from data.personnel import injury_flags, key_injuries, last_week_snaps, ol_dl_starters
+from data.personnel import (
+    injury_flags,
+    injury_records,
+    key_injuries,
+    last_week_snaps,
+    ol_dl_starters,
+    depth_starters,
+    starter_out_line,
+)
 from data.schedules import current_week as sched_current_week
-from data.schedules import load_schedules
+from data.schedules import format_kickoff_pt, load_schedules
 from data.team_form import (
     annotate_defense_and_scoring,
     load_team_week_stats,
@@ -390,6 +398,7 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
     weather = _safe(lambda: weather_for_games(week_games), pl.DataFrame())
     inj = _safe(lambda: key_injuries(season, week, teams), pl.DataFrame())
     starters = _safe(lambda: ol_dl_starters(season, teams), pl.DataFrame())
+    all_starters = _safe(lambda: depth_starters(season, teams), pl.DataFrame())
     snaps = _safe(lambda: last_week_snaps(season, week, teams), pl.DataFrame())
     press = _safe(lambda: team_pressure(season), pl.DataFrame())
     ngs = _safe(lambda: team_ngs(season), pl.DataFrame())
@@ -436,6 +445,8 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
         conf = _confidence(g, nf_g)
         standouts = _standouts(units, home, away)
         venue = g.get("venue") or ("outdoor" if g.get("roof") in {"outdoors", "open"} else "indoor")
+        inj_home_rows = injury_records(inj, all_starters, snaps, home)
+        inj_away_rows = injury_records(inj, all_starters, snaps, away)
         cards.append(
             {
                 "game_id": g.get("game_id"),
@@ -459,8 +470,13 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
                 "wx_wind_mph": wx.get("wind_mph"),
                 "wx_precip_in": wx.get("precip_in"),
                 "weather_note": wx.get("weather_note") or "",
+                "kickoff_pt": format_kickoff_pt(g.get("gameday"), g.get("gametime")),
                 "injuries_home": _inj_text(inj, home),
                 "injuries_away": _inj_text(inj, away),
+                "injuries_out_home": starter_out_line(inj_home_rows),
+                "injuries_out_away": starter_out_line(inj_away_rows),
+                "injuries_home_rows": inj_home_rows,
+                "injuries_away_rows": inj_away_rows,
                 "ol_home": _ol_line(starters, home, "ol"),
                 "ol_away": _ol_line(starters, away, "ol"),
                 "dl_home": _ol_line(starters, home, "dl"),
@@ -494,6 +510,9 @@ def board_table(cards: list[dict[str, Any]]) -> pl.DataFrame:
         home = c["home_team"]
         away = c["away_team"]
         spread_txt = format_spread(c.get("spread_line"), home, away)
+        when = c.get("kickoff_pt") or ""
+        if not when:
+            when = f"{(c.get('weekday') or '')[:3]} {c.get('gametime') or ''}".strip()
         wx = "indoor"
         if c.get("venue") == "outdoor":
             bits = []
@@ -511,17 +530,18 @@ def board_table(cards: list[dict[str, Any]]) -> pl.DataFrame:
             score = f"{int(c['away_score'])}-{int(c['home_score'])}"
         rows.append(
             {
-                "When": f"{c.get('gameday')} {c.get('gametime') or ''}".strip(),
+                "When": when,
                 "Matchup": f"{away} @ {home}",
                 "Score": score,
                 "Spread": spread_txt,
                 "Win%": _pct(c.get("home_win_pct")) + (f" {home}" if c.get("home_win_pct") is not None else ""),
-                "Src": c.get("win_pct_source") or "—",
+                "win_pct_source": c.get("win_pct_source") or "",
                 "Venue": wx,
-                "Key injuries": " | ".join(
-                    x for x in [f"{away}: {c.get('injuries_away')}" if c.get("injuries_away") else "",
-                                 f"{home}: {c.get('injuries_home')}" if c.get("injuries_home") else ""]
-                    if x
+                "Starters out": "\n".join(
+                    x for x in [
+                        f"{away}  {c.get('injuries_out_away')}" if c.get("injuries_out_away") else f"{away}  —",
+                        f"{home}  {c.get('injuries_out_home')}" if c.get("injuries_out_home") else f"{home}  —",
+                    ]
                 ),
                 "Standouts": c.get("standout_text") or "",
             }

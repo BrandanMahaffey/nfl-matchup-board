@@ -237,3 +237,108 @@ def last_week_snaps(season: int, week: int, teams: list[str]) -> pl.DataFrame:
         "defense_snaps",
         "defense_pct",
     )
+
+
+def _norm_name(value: object) -> str:
+    if value is None:
+        return ""
+    return " ".join(str(value).lower().split())
+
+
+def _last_name(value: object) -> str:
+    name = str(value or "").strip()
+    if not name:
+        return ""
+    return name.split()[-1]
+
+
+def depth_starters(season: int, teams: list[str]) -> pl.DataFrame:
+    """Every listed rank-1 depth-chart player for ``teams`` (latest chart)."""
+    url = f"{RELEASE}/depth_charts/depth_charts_{season}.csv"
+    try:
+        df = load_csv(url)
+    except RuntimeError:
+        return _empty_starters()
+    if df.is_empty() or "dt" not in df.columns:
+        return _empty_starters()
+    latest_dt = df.select(pl.col("dt").max()).item()
+    df = df.filter(pl.col("dt") == latest_dt, pl.col("team").is_in(teams), pl.col("pos_rank") == 1)
+    if df.is_empty():
+        return _empty_starters()
+    return (
+        df.sort(["team", "pos_abb", "pos_grp"])
+        .unique(subset=["team", "gsis_id"], keep="first")
+        .select(
+            "team",
+            pl.lit("starter").alias("unit"),
+            "pos_abb",
+            "player_name",
+            "gsis_id",
+        )
+    )
+
+
+def injury_records(
+    injuries: pl.DataFrame,
+    starters: pl.DataFrame,
+    snaps: pl.DataFrame,
+    team: str,
+) -> list[dict]:
+    """Structured injury rows; ``is_starter`` uses depth chart or 50%+ snaps."""
+    if injuries is None or injuries.is_empty() or "team" not in injuries.columns:
+        return []
+    sub = injuries.filter(pl.col("team") == team)
+    if sub.is_empty():
+        return []
+
+    starter_ids: set[str] = set()
+    starter_names: set[str] = set()
+    if starters is not None and not starters.is_empty() and "team" in starters.columns:
+        s = starters.filter(pl.col("team") == team)
+        if "gsis_id" in s.columns:
+            starter_ids = {str(x) for x in s.get_column("gsis_id").drop_nulls().to_list()}
+        if "player_name" in s.columns:
+            starter_names = {_norm_name(x) for x in s.get_column("player_name").drop_nulls().to_list()}
+    if snaps is not None and not snaps.is_empty() and "team" in snaps.columns:
+        sn = snaps.filter(pl.col("team") == team)
+        if not sn.is_empty() and "player" in sn.columns:
+            starter_names |= {_norm_name(x) for x in sn.get_column("player").drop_nulls().to_list()}
+
+    rows: list[dict] = []
+    for row in sub.iter_rows(named=True):
+        status = _normalize_status(row.get("report_status"))
+        if status is None:
+            continue
+        name = (row.get("full_name") or "").strip()
+        if not name:
+            continue
+        gid = str(row.get("gsis_id") or "")
+        is_starter = (gid and gid in starter_ids) or _norm_name(name) in starter_names
+        rows.append(
+            {
+                "team": team,
+                "player": name,
+                "position": (row.get("position") or "").strip().upper(),
+                "status": status,
+                "injury": (row.get("report_primary_injury") or "").strip(),
+                "practice": (row.get("practice_status") or "").strip(),
+                "is_starter": is_starter,
+                "is_key": bool(row.get("is_key")),
+            }
+        )
+    rank = {"out": 0, "doubtful": 1, "questionable": 2}
+    rows.sort(key=lambda r: (0 if r["is_starter"] else 1, rank.get(r["status"], 9), r["player"]))
+    return rows
+
+
+def starter_out_line(records: list[dict]) -> str:
+    """Readable last-name list of starters listed as out."""
+    names = [_last_name(r["player"]) for r in records if r.get("is_starter") and r.get("status") == "out"]
+    # unique, keep order
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for n in names:
+        if n and n not in seen:
+            seen.add(n)
+            ordered.append(n)
+    return " · ".join(ordered)

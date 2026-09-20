@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, time
 from zoneinfo import ZoneInfo
 
 import polars as pl
@@ -42,8 +42,9 @@ _SCHEDULE_COLUMNS = [
 ]
 
 _EASTERN = ZoneInfo("America/New_York")
+_PACIFIC = ZoneInfo("America/Los_Angeles")
 _OUTDOOR_ROOFS = {"outdoors", "open"}
-
+_DEFAULT_KICKOFF = time(13, 0)
 
 def _empty_schedules() -> pl.DataFrame:
     return pl.DataFrame(
@@ -112,6 +113,39 @@ def _parse_gameday(value: object) -> date | None:
         return date.fromisoformat(text[:10])
     except ValueError:
         return None
+
+
+def _parse_gametime(value: object) -> time:
+    if value is None:
+        return _DEFAULT_KICKOFF
+    if isinstance(value, time):
+        return value
+    if isinstance(value, datetime):
+        return value.time()
+    text = str(value).strip()
+    if not text:
+        return _DEFAULT_KICKOFF
+    for fmt in ("%H:%M", "%H:%M:%S", "%I:%M%p", "%I:%M %p"):
+        try:
+            return datetime.strptime(text.replace(" ", ""), fmt.replace(" ", "")).time() if " " not in fmt else datetime.strptime(text, fmt).time()
+        except ValueError:
+            continue
+    try:
+        parts = text.replace(".", ":").split(":")
+        return time(int(parts[0]), int(parts[1]) if len(parts) > 1 else 0)
+    except ValueError:
+        return _DEFAULT_KICKOFF
+
+
+def format_kickoff_pt(gameday: object, gametime: object) -> str:
+    """Weekday + 12-hour Pacific kickoff, e.g. Sun 10:00 AM."""
+    day = _parse_gameday(gameday)
+    if day is None:
+        return ""
+    kick = _parse_gametime(gametime)
+    dt = datetime.combine(day, kick, tzinfo=_EASTERN).astimezone(_PACIFIC)
+    hour12 = dt.strftime("%I").lstrip("0") or "12"
+    return f"{dt.strftime('%a')} {hour12}:{dt.strftime('%M %p')}"
 
 
 def load_schedules(season: int) -> pl.DataFrame:
