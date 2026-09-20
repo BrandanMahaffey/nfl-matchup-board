@@ -1,9 +1,18 @@
 [theme]
 base = "dark"
-primaryColor = "#c8a24a"
-backgroundColor = "#0f1419"
-secondaryBackgroundColor = "#1a222c"
-textColor = "#e8eef4"
+primaryColor = "#d8a94b"
+backgroundColor = "#0d1117"
+secondaryBackgroundColor = "#161c24"
+textColor = "#e6edf3"
+linkColor = "#d8a94b"
+borderColor = "#242e3a"
+dataframeBorderColor = "#242e3a"
+dataframeHeaderBackgroundColor = "#141b23"
+baseRadius = "0.6rem"
+buttonRadius = "0.5rem"
+baseFontSize = 15
+showWidgetBorder = true
+headingFontWeights = [700, 700, 650]
 
 [server]
 headless = true

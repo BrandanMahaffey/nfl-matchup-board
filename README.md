@@ -1,8 +1,17 @@
 # NFL Matchup Board
 
-Weekly football-pool comparison board. One join per game: nflverse team form, injuries, last-week snaps, OL/DL depth, PFR pressure, NGS, nfelo (or moneyline), and outdoor weather.
+Weekly football-pool comparison board. One join per game: nflverse team form, injuries, depth charts and snap counts, PFF pressure, Next Gen Stats, nfelo (or the moneyline), and outdoor weather.
 
-No PFF. No paid odds API. Numbers are context, not predicted scores.
+No paid odds API. Numbers are context, not predicted scores.
+
+## Pages
+
+- **Week board** — every game in one sortable grid: kickoff in Pacific, spread, home win probability, total, conditions, out/questionable counts, and the biggest statistical mismatch. Tick a row to open that game.
+- **Game page** — hero card with both clubs, market and nfelo numbers, why the game stands out, availability, and side-by-side comparison bars grouped into passing, rushing, trenches, scoring and special teams. A second tab holds the full injury report.
+- **Teams** — season-to-date form for all 32 clubs, ranked by nfelo, filterable by conference.
+- **Injuries** — the whole week's report with status, team and starters-only filters.
+
+Every column header and metric label carries a hover definition, and each page has a "What the numbers mean" glossary.
 
 ## Local
 

@@ -8,13 +8,10 @@ import polars as pl
 
 from data.nfelo import load_elo_snapshot, load_nfelo_games
 from data.personnel import (
-    injury_count_label,
-    injury_flags,
+    depth_starters,
     injury_records,
     key_injuries,
     last_week_snaps,
-    ol_dl_starters,
-    depth_starters,
     starter_out_line,
 )
 from data.schedules import current_week as sched_current_week
@@ -36,10 +33,6 @@ def _safe(fn, default):
         return fn()
     except Exception:
         return default
-
-
-def _empty(*cols: str) -> pl.DataFrame:
-    return pl.DataFrame(schema={c: pl.Utf8 for c in cols})
 
 
 def _row(df: pl.DataFrame | None, team: str, col: str = "team") -> dict[str, Any]:
@@ -79,14 +72,6 @@ def _fmt(val: float | None, digits: int = 1, signed: bool = False) -> str:
     if signed:
         return f"{val:+.{digits}f}"
     return f"{val:.{digits}f}"
-
-
-def _pct(val: float | None) -> str:
-    if val is None:
-        return "—"
-    if val > 1.5:
-        return f"{val:.0f}%"
-    return f"{100.0 * val:.0f}%"
 
 
 def _rate_pct(val: float | None) -> float | None:
@@ -161,80 +146,6 @@ def _agg_by_team(df: pl.DataFrame, through: int, means: list[str], sums: list[st
     if not aggs:
         return pl.DataFrame()
     return work.group_by("team").agg(aggs)
-
-
-def _ol_line(starters: pl.DataFrame, team: str, unit: str) -> str:
-    if starters is None or starters.is_empty():
-        return "—"
-    rows = starters.filter((pl.col("team") == team) & (pl.col("unit") == unit))
-    if rows.is_empty():
-        return "—"
-    order_ol = ["LT", "LG", "C", "RG", "RT"]
-    order_dl = ["LDE", "LDT", "NT", "RDT", "RDE", "LOLB", "ROLB", "DE", "DT", "EDGE"]
-    order = order_ol if unit == "ol" else order_dl
-    by_pos: dict[str, str] = {}
-    extras: list[str] = []
-    for r in rows.to_dicts():
-        pos = str(r.get("pos_abb") or "")
-        name = str(r.get("player_name") or "").split(" ")[-1]
-        label = f"{pos} {name}".strip()
-        if pos in by_pos:
-            extras.append(label)
-        else:
-            by_pos[pos] = label
-    ordered = [by_pos[p] for p in order if p in by_pos]
-    rest = [by_pos[p] for p in by_pos if p not in order] + extras
-    return " · ".join(ordered + rest) or "—"
-
-
-def _snap_line(snaps: pl.DataFrame, team: str, side: str) -> str:
-    if snaps is None or snaps.is_empty() or "team" not in snaps.columns:
-        return ""
-    sub = snaps.filter(pl.col("team") == team)
-    if sub.is_empty():
-        return ""
-    pct_col = "offense_pct" if side == "off" else "defense_pct"
-    if pct_col not in sub.columns:
-        return ""
-    ranked = sub.sort(pct_col, descending=True).head(6)
-    parts = []
-    for r in ranked.to_dicts():
-        name = str(r.get("player") or "").split(" ")[-1]
-        pct = r.get(pct_col)
-        if pct is None or not name:
-            continue
-        n = float(pct)
-        if n <= 1.5:
-            n *= 100.0
-        parts.append(f"{name} {n:.0f}%")
-    return " · ".join(parts)
-
-def _inj_text(inj: pl.DataFrame, team: str) -> str:
-    if inj is None or inj.is_empty() or "team" not in inj.columns:
-        return ""
-    sub = inj.filter(pl.col("team") == team)
-    if sub.is_empty():
-        return ""
-    try:
-        return injury_flags(sub) or ""
-    except Exception:
-        return ""
-
-
-def _mismatch(home: dict, away: dict, home_key: str, away_key: str, pg: bool = True) -> float | None:
-    if pg:
-        hv = _pg(home, home_key, pg_key=home_key if home_key.endswith("_pg") else None)
-        if hv is None:
-            hv = _pg(home, home_key)
-        av = _pg(away, away_key, pg_key=away_key if away_key.endswith("_pg") else None)
-        if av is None:
-            av = _pg(away, away_key)
-        return None if hv is None or av is None else hv - av
-    hv = _num(home, home_key)
-    av = _num(away, away_key)
-    if hv is None or av is None:
-        return None
-    return hv - av
 
 
 def _unit_block(home: dict, away: dict, press_h: dict, press_a: dict, ngs_h: dict, ngs_a: dict) -> dict[str, Any]:
@@ -374,24 +285,48 @@ def _standout_sentence(key: str, val: float, home: str, away: str) -> str:
     return f"{key} {gap}"
 
 
-def _standouts(units: dict[str, Any], home: str, away: str) -> list[str]:
-    flags: list[tuple[float, str]] = []
-    checks = [
-        ("pass_home", units.get("pass_home"), 4.0),
-        ("pass_away", units.get("pass_away"), 4.0),
-        ("run_home", units.get("run_home"), 2.5),
-        ("run_away", units.get("run_away"), 2.5),
-        ("score_home", units.get("score_home"), 6.0),
-        ("score_away", units.get("score_away"), 6.0),
-        ("to_gap", units.get("to_gap"), 0.6),
-        ("fg_gap", units.get("fg_gap"), 0.15),
+_STANDOUT_CHECKS = (
+    ("pass_home", 4.0),
+    ("pass_away", 4.0),
+    ("run_home", 2.5),
+    ("run_away", 2.5),
+    ("score_home", 6.0),
+    ("score_away", 6.0),
+    ("to_gap", 0.6),
+    ("fg_gap", 0.15),
+)
+
+
+def _standout_flags(units: dict[str, Any]) -> list[tuple[str, float]]:
+    """Mismatches big enough to mention, largest first."""
+    flags = [
+        (key, float(units[key]))
+        for key, thresh in _STANDOUT_CHECKS
+        if units.get(key) is not None and abs(float(units[key])) >= thresh
     ]
-    for key, val, thresh in checks:
-        if val is None or abs(val) < thresh:
-            continue
-        flags.append((abs(val), _standout_sentence(key, val, home, away)))
-    flags.sort(reverse=True)
-    return [t for _, t in flags[:4]]
+    flags.sort(key=lambda kv: abs(kv[1]), reverse=True)
+    return flags
+
+
+def _standout_short(key: str, val: float, home: str, away: str) -> str:
+    """Board-column version of a standout, e.g. ``BUF pass +15.5 EPA``."""
+    mag = abs(val)
+    if key in {"pass_home", "pass_away", "run_home", "run_away"}:
+        facet = "pass" if key.startswith("pass") else "run"
+        offense, defense = (home, away) if key.endswith("home") else (away, home)
+        if val > 0:
+            return f"{offense} {facet} +{mag:.1f} EPA"
+        return f"{defense} {facet} defense +{mag:.1f} EPA"
+    if key in {"score_home", "score_away"}:
+        offense, defense = (home, away) if key.endswith("home") else (away, home)
+        if val > 0:
+            return f"{offense} scoring +{mag:.1f} pts"
+        return f"{defense} defense +{mag:.1f} pts"
+    if key == "to_gap":
+        return f"{home if val > 0 else away} takeaways +{mag:.1f}/g"
+    if key == "fg_gap":
+        return f"{home if val > 0 else away} kicking +{100 * mag:.0f} FG%"
+    return f"{key} {val:+.1f}"
 
 
 def _confidence(game: dict, nfelo_g: dict) -> dict[str, Any]:
@@ -435,7 +370,6 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
     nfelo_games = _safe(lambda: load_nfelo_games(season), pl.DataFrame())
     weather = _safe(lambda: weather_for_games(week_games), pl.DataFrame())
     inj = _safe(lambda: key_injuries(season, week, teams), pl.DataFrame())
-    starters = _safe(lambda: ol_dl_starters(season, teams), pl.DataFrame())
     all_starters = _safe(lambda: depth_starters(season, teams), pl.DataFrame())
     snaps = _safe(lambda: last_week_snaps(season, week, teams), pl.DataFrame())
     press = _safe(lambda: team_pressure(season), pl.DataFrame())
@@ -481,7 +415,8 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
             _row(ngs_team, away),
         )
         conf = _confidence(g, nf_g)
-        standouts = _standouts(units, home, away)
+        flags = _standout_flags(units)
+        standouts = [_standout_sentence(k, v, home, away) for k, v in flags[:4]]
         venue = g.get("venue") or ("outdoor" if g.get("roof") in {"outdoors", "open"} else "indoor")
         inj_home_rows = injury_records(inj, all_starters, snaps, home)
         inj_away_rows = injury_records(inj, all_starters, snaps, away)
@@ -509,22 +444,10 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
                 "wx_precip_in": wx.get("precip_in"),
                 "weather_note": wx.get("weather_note") or "",
                 "kickoff_pt": format_kickoff_pt(g.get("gameday"), g.get("gametime")),
-                "injuries_home": _inj_text(inj, home),
-                "injuries_away": _inj_text(inj, away),
                 "injuries_out_home": starter_out_line(inj_home_rows),
                 "injuries_out_away": starter_out_line(inj_away_rows),
-                "injuries_count_home": injury_count_label(inj_home_rows),
-                "injuries_count_away": injury_count_label(inj_away_rows),
                 "injuries_home_rows": inj_home_rows,
                 "injuries_away_rows": inj_away_rows,
-                "ol_home": _ol_line(starters, home, "ol"),
-                "ol_away": _ol_line(starters, away, "ol"),
-                "dl_home": _ol_line(starters, home, "dl"),
-                "dl_away": _ol_line(starters, away, "dl"),
-                "snaps_off_home": _snap_line(snaps, home, "off"),
-                "snaps_off_away": _snap_line(snaps, away, "off"),
-                "snaps_def_home": _snap_line(snaps, home, "def"),
-                "snaps_def_away": _snap_line(snaps, away, "def"),
                 "nfelo_home": _num(h_elo, "nfelo"),
                 "nfelo_away": _num(a_elo, "nfelo"),
                 "pts_vs_avg_home": _num(h_elo, "pts_vs_avg"),
@@ -536,57 +459,13 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
                 "rec_to_diff_home": _num(h_rec, "rec_to_diff"),
                 "rec_to_diff_away": _num(a_rec, "rec_to_diff"),
                 "standouts": standouts,
-                "standout_text": " · ".join(standouts),
+                "standout_short": _standout_short(*flags[0], home, away) if flags else "",
                 **conf,
                 **{f"u_{k}": v for k, v in units.items()},
             }
         )
     return cards
 
-
-def board_table(cards: list[dict[str, Any]]) -> pl.DataFrame:
-    rows = []
-    for c in cards:
-        home = c["home_team"]
-        away = c["away_team"]
-        spread_txt = format_spread(c.get("spread_line"), home, away)
-        when = c.get("kickoff_pt") or ""
-        if not when:
-            when = f"{(c.get('weekday') or '')[:3]} {c.get('gametime') or ''}".strip()
-        wx = "indoor"
-        if c.get("venue") == "outdoor":
-            bits = []
-            t = c.get("wx_temp_f") if c.get("wx_temp_f") is not None else c.get("temp")
-            w = c.get("wx_wind_mph") if c.get("wx_wind_mph") is not None else c.get("wind")
-            if t is not None:
-                bits.append(f"{float(t):.0f}°F")
-            if w is not None:
-                bits.append(f"{float(w):.0f} mph")
-            if c.get("wx_precip_in"):
-                bits.append(f"{float(c['wx_precip_in']):.2f} in")
-            wx = " ".join(bits) or (c.get("weather_note") or "outdoor")
-        score = ""
-        if c.get("home_score") is not None and c.get("away_score") is not None:
-            score = f"{int(c['away_score'])}-{int(c['home_score'])}"
-        rows.append(
-            {
-                "When": when,
-                "Matchup": f"{away} @ {home}",
-                "Score": score,
-                "Spread": spread_txt,
-                "Win%": _pct(c.get("home_win_pct")) + (f" {home}" if c.get("home_win_pct") is not None else ""),
-                "win_pct_source": c.get("win_pct_source") or "",
-                "Venue": wx,
-                "Starters out": "\n".join(
-                    x for x in [
-                        f"{away}  {c.get('injuries_out_away')}" if c.get("injuries_out_away") else f"{away}  —",
-                        f"{home}  {c.get('injuries_out_home')}" if c.get("injuries_out_home") else f"{home}  —",
-                    ]
-                ),
-                "Standouts": c.get("standout_text") or "",
-            }
-        )
-    return pl.DataFrame(rows) if rows else pl.DataFrame()
 
 def league_team_rows(season: int, week: int) -> list[dict[str, Any]]:
     """Season-to-date team form through the week before ``week``."""
