@@ -336,22 +336,59 @@ def _unit_block(home: dict, away: dict, press_h: dict, press_a: dict, ngs_h: dic
     }
 
 
+def _standout_sentence(key: str, val: float, home: str, away: str) -> str:
+    gap = _fmt(val, 1, signed=True)
+    if key == "pass_home":
+        if val > 0:
+            return f"{home} passing attack is much stronger than {away} pass defense ({gap} EPA/g gap)"
+        return f"{away} pass defense has the edge vs {home} passing ({gap} EPA/g gap)"
+    if key == "pass_away":
+        if val > 0:
+            return f"{away} passing attack is much stronger than {home} pass defense ({gap} EPA/g gap)"
+        return f"{home} pass defense has the edge vs {away} passing ({gap} EPA/g gap)"
+    if key == "run_home":
+        if val > 0:
+            return f"{home} run game is much stronger than {away} run defense ({gap} EPA/g gap)"
+        return f"{away} run defense has the edge vs {home} rushing ({gap} EPA/g gap)"
+    if key == "run_away":
+        if val > 0:
+            return f"{away} run game is much stronger than {home} run defense ({gap} EPA/g gap)"
+        return f"{home} run defense has the edge vs {away} rushing ({gap} EPA/g gap)"
+    if key == "score_home":
+        if val > 0:
+            return f"{home} scoring attack is much stronger than {away} defense usually allows ({gap} pts/g gap)"
+        return f"{away} defense has the edge vs {home} scoring ({gap} pts/g gap)"
+    if key == "score_away":
+        if val > 0:
+            return f"{away} scoring attack is much stronger than {home} defense usually allows ({gap} pts/g gap)"
+        return f"{home} defense has the edge vs {away} scoring ({gap} pts/g gap)"
+    if key == "to_gap":
+        if val > 0:
+            return f"{home} has a big turnover edge over {away} ({gap}/g)"
+        return f"{away} has a big turnover edge over {home} ({gap}/g)"
+    if key == "fg_gap":
+        if val > 0:
+            return f"{home} kicking has the edge over {away} ({gap} FG% gap)"
+        return f"{away} kicking has the edge over {home} ({gap} FG% gap)"
+    return f"{key} {gap}"
+
+
 def _standouts(units: dict[str, Any], home: str, away: str) -> list[str]:
     flags: list[tuple[float, str]] = []
     checks = [
-        (units.get("pass_home"), 4.0, f"{home} pass vs {away} pass D"),
-        (units.get("pass_away"), 4.0, f"{away} pass vs {home} pass D"),
-        (units.get("run_home"), 2.5, f"{home} run vs {away} run D"),
-        (units.get("run_away"), 2.5, f"{away} run vs {home} run D"),
-        (units.get("score_home"), 6.0, f"{home} scoring vs {away} allowed"),
-        (units.get("score_away"), 6.0, f"{away} scoring vs {home} allowed"),
-        (units.get("to_gap"), 0.6, f"{home} TO margin vs {away}"),
-        (units.get("fg_gap"), 0.15, f"{home} FG% vs {away}"),
+        ("pass_home", units.get("pass_home"), 4.0),
+        ("pass_away", units.get("pass_away"), 4.0),
+        ("run_home", units.get("run_home"), 2.5),
+        ("run_away", units.get("run_away"), 2.5),
+        ("score_home", units.get("score_home"), 6.0),
+        ("score_away", units.get("score_away"), 6.0),
+        ("to_gap", units.get("to_gap"), 0.6),
+        ("fg_gap", units.get("fg_gap"), 0.15),
     ]
-    for val, thresh, label in checks:
+    for key, val, thresh in checks:
         if val is None or abs(val) < thresh:
             continue
-        flags.append((abs(val), f"{label} {_fmt(val, 1, signed=True)}"))
+        flags.append((abs(val), _standout_sentence(key, val, home, away)))
     flags.sort(reverse=True)
     return [t for _, t in flags[:4]]
 

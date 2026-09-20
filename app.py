@@ -33,11 +33,7 @@ st.markdown(
         padding: 0.55rem 0.7rem; border-bottom: 1px solid #1f2933; vertical-align: top;
       }
       table.board tr:hover td { background: #151c24; }
-      table.board a { color: #c8a24a; text-decoration: none; font-weight: 600; }
-      table.board a:hover { text-decoration: underline; }
       .win { cursor: help; border-bottom: 1px dotted #6b7785; }
-      .inj { color: #e8eef4; font-size: 0.88rem; line-height: 1.35; }
-      .inj a { color: #e8eef4; font-weight: 500; }
       .muted { color: #8b98a5; }
       .game-grid { display: flex; flex-wrap: wrap; gap: 0.4rem 0.5rem; margin: 0.4rem 0 0.8rem; }
       .game-grid a {
@@ -82,22 +78,96 @@ def _weeks(season: int):
     return available_weeks(season)
 
 
-def _unit_row(label, home_val, away_val, gap, home, away, digits=1, signed_gap=True):
+def _unit_row(label, home_val, away_val, home, away, digits=1, unit_title=None):
     return {
         "Unit": label,
+        "unit_title": unit_title or label,
         away: _fmt(away_val, digits),
         home: _fmt(home_val, digits),
-        "Gap (home view)": _fmt(gap, digits, signed=signed_gap),
     }
 
 
-def _href(season: int, week: int, game: str | None = None, view: str | None = None) -> str:
-    parts = [f"season={season}", f"week={week}"]
-    if game:
-        parts.append(f"game={html.escape(game, quote=True)}")
-    if view:
-        parts.append(f"view={html.escape(view, quote=True)}")
-    return "?" + "&".join(parts)
+_UNIT_TITLES = {
+    "CPOE": "Completion Percentage Over Expected",
+    "RYOE (sum)": "Rush Yards Over Expected",
+    "Time to throw": "Time to throw",
+    "TO margin/g": "Turnover margin per game",
+    "FG%": "Field goal percentage",
+    "ST TDs": "Special teams touchdowns",
+    "Pass EPA/g": "Pass Expected Points Added per game",
+    "Pass EPA allowed/g": "Pass Expected Points Added allowed per game",
+    "Run EPA/g": "Run Expected Points Added per game",
+    "Run EPA allowed/g": "Run Expected Points Added allowed per game",
+    "Off EPA/g": "Offense Expected Points Added per game",
+    "Def EPA/g (allowed)": "Defense Expected Points Added allowed per game",
+}
+
+
+def _unit_title(label: str) -> str:
+    return _UNIT_TITLES.get(label, label)
+
+
+def _unit_table_html(rows: list[dict], away: str, home: str) -> str:
+    thead = (
+        "<thead><tr>"
+        f"<th>Unit</th><th>{html.escape(away)}</th><th>{html.escape(home)}</th>"
+        "</tr></thead>"
+    )
+    body = []
+    for row in rows:
+        label = row["Unit"]
+        title = html.escape(row.get("unit_title") or _unit_title(label))
+        unit = f'<span class="unit" title="{title}">{html.escape(label)}</span>'
+        body.append(
+            "<tr>"
+            f"<td>{unit}</td>"
+            f"<td>{html.escape(str(row[away]))}</td>"
+            f"<td>{html.escape(str(row[home]))}</td>"
+            "</tr>"
+        )
+    return (
+        '<div class="board-wrap"><table class="board">'
+        f"{thead}<tbody>{''.join(body)}</tbody></table></div>"
+    )
+
+
+def _weather_note_extra(note: str, t, w, p) -> bool:
+    import re
+
+    remainder = note
+    if t is not None:
+        remainder = re.sub(rf"\b{int(round(float(t)))}\s*°?\s*F\b", "", remainder, flags=re.I)
+    if w is not None:
+        remainder = re.sub(rf"\b{int(round(float(w)))}\s*mph\b", "", remainder, flags=re.I)
+    if p:
+        for pat in (rf"\b{float(p):.2f}\s*in\b", rf"\b{float(p):.1f}\s*in\b"):
+            remainder = re.sub(pat, "", remainder, flags=re.I)
+    remainder = re.sub(
+        r"\b(wind|mph|precip(?:itation)?|temp(?:erature)?|degrees?|°f)\b",
+        "",
+        remainder,
+        flags=re.I,
+    )
+    remainder = re.sub(r"[,·|/\s]+", " ", remainder).strip(" .,-")
+    return len(remainder) >= 3
+
+def _weather_banner_parts(c: dict) -> list[str]:
+    t = c.get("wx_temp_f") if c.get("wx_temp_f") is not None else c.get("temp")
+    w = c.get("wx_wind_mph") if c.get("wx_wind_mph") is not None else c.get("wind")
+    p = c.get("wx_precip_in")
+    parts = []
+    if t is not None:
+        parts.append(f"{float(t):.0f}°F")
+    if w is not None:
+        parts.append(f"{float(w):.0f} mph wind")
+    if p:
+        parts.append(f"{float(p):.2f} in precip")
+    note = (c.get("weather_note") or "").strip()
+    if note and (not parts or _weather_note_extra(note, t, w, p)):
+        parts.append(note)
+    return parts
+
+
 
 
 def _set_view(season: int, week: int, game: str | None = None, view: str | None = None) -> None:
@@ -169,135 +239,128 @@ def render_card(c: dict):
     c4.metric("nfelo", f"{_fmt(c.get('nfelo_away'), 0)} / {_fmt(c.get('nfelo_home'), 0)}", _fmt(nf_gap, 0, True))
 
     if c.get("venue") == "outdoor":
-        t = c.get("wx_temp_f") if c.get("wx_temp_f") is not None else c.get("temp")
-        w = c.get("wx_wind_mph") if c.get("wx_wind_mph") is not None else c.get("wind")
-        p = c.get("wx_precip_in")
-        st.info(
-            "Weather: "
-            + " · ".join(
-                x
-                for x in [
-                    f"{float(t):.0f}°F" if t is not None else None,
-                    f"{float(w):.0f} mph wind" if w is not None else None,
-                    f"{float(p):.2f} in precip" if p else None,
-                    c.get("weather_note") or None,
-                ]
-                if x
-            )
-            or "outdoor (no reading yet)"
-        )
+        wx = _weather_banner_parts(c)
+        st.info("Weather: " + (" · ".join(wx) if wx else "outdoor (no reading yet)"))
 
     if c.get("standouts"):
-        st.markdown("**Standouts:** " + " · ".join(c["standouts"]))
+        st.markdown("**Why this game stands out**")
+        bullets = []
+        for item in c["standouts"]:
+            if isinstance(item, dict):
+                label = item.get("label") or ""
+                detail = item.get("detail") or ""
+                if label and detail:
+                    bullets.append(f"- **{label}:** {detail}")
+                else:
+                    bullets.append(f"- {label or detail}")
+            else:
+                bullets.append(f"- {item}")
+        st.markdown("\n".join(bullets))
 
     i1, i2 = st.columns(2)
     i1.markdown(f"**{away} starters out**  \n{c.get('injuries_out_away') or 'none'}")
     i2.markdown(f"**{home} starters out**  \n{c.get('injuries_out_home') or 'none'}")
 
     rows = [
-        _unit_row("Pass EPA/g", c.get("u_h_pass"), c.get("u_a_pass"), c.get("u_pass_home"), home, away),
-        _unit_row("Pass EPA allowed/g", c.get("u_h_pass_d"), c.get("u_a_pass_d"), c.get("u_pass_away"), home, away),
-        _unit_row("Run EPA/g", c.get("u_h_rush"), c.get("u_a_rush"), c.get("u_run_home"), home, away),
-        _unit_row("Run EPA allowed/g", c.get("u_h_rush_d"), c.get("u_a_rush_d"), c.get("u_run_away"), home, away),
-        _unit_row("Points for/g", c.get("u_h_pf"), c.get("u_a_pf"), c.get("u_score_home"), home, away),
-        _unit_row("Points allowed/g", c.get("u_h_pa"), c.get("u_a_pa"), c.get("u_score_away"), home, away),
-        _unit_row("TO margin/g", c.get("u_to_home"), c.get("u_to_away"), c.get("u_to_gap"), home, away, digits=2),
-        _unit_row("Pressures generated", c.get("u_h_press_gen"), c.get("u_a_press_gen"), c.get("u_trench_home"), home, away, digits=0),
-        _unit_row("Pressures allowed", c.get("u_h_press_all"), c.get("u_a_press_all"), c.get("u_trench_away"), home, away, digits=0),
-        _unit_row("Pressure % allowed", c.get("u_press_pct_home"), c.get("u_press_pct_away"), None, home, away, digits=1),
-        _unit_row("Off EPA/g", c.get("u_off_epa_pg_home"), c.get("u_off_epa_pg_away"), None, home, away),
-        _unit_row("Def EPA/g (allowed)", c.get("u_def_epa_pg_home"), c.get("u_def_epa_pg_away"), None, home, away),
-        _unit_row("CPOE", c.get("u_cpoe_home"), c.get("u_cpoe_away"), None, home, away, digits=1),
-        _unit_row("Time to throw", c.get("u_ttt_home"), c.get("u_ttt_away"), None, home, away, digits=2),
-        _unit_row("RYOE (sum)", c.get("u_ryoe_home"), c.get("u_ryoe_away"), None, home, away, digits=0),
-        _unit_row("ST TDs", c.get("u_st_tds_home"), c.get("u_st_tds_away"), None, home, away, digits=0),
-        _unit_row("FG%", c.get("u_fg_home"), c.get("u_fg_away"), c.get("u_fg_gap"), home, away, digits=2),
-        _unit_row("Punt net yds", c.get("u_punt_net_home"), c.get("u_punt_net_away"), None, home, away, digits=1),
+        _unit_row("Pass EPA/g", c.get("u_h_pass"), c.get("u_a_pass"), home, away),
+        _unit_row("Pass EPA allowed/g", c.get("u_h_pass_d"), c.get("u_a_pass_d"), home, away),
+        _unit_row("Run EPA/g", c.get("u_h_rush"), c.get("u_a_rush"), home, away),
+        _unit_row("Run EPA allowed/g", c.get("u_h_rush_d"), c.get("u_a_rush_d"), home, away),
+        _unit_row("Points for/g", c.get("u_h_pf"), c.get("u_a_pf"), home, away),
+        _unit_row("Points allowed/g", c.get("u_h_pa"), c.get("u_a_pa"), home, away),
+        _unit_row("TO margin/g", c.get("u_to_home"), c.get("u_to_away"), home, away, digits=2),
+        _unit_row("Pressures generated", c.get("u_h_press_gen"), c.get("u_a_press_gen"), home, away, digits=0),
+        _unit_row("Pressures allowed", c.get("u_h_press_all"), c.get("u_a_press_all"), home, away, digits=0),
+        _unit_row("Pressure % allowed", c.get("u_press_pct_home"), c.get("u_press_pct_away"), home, away, digits=1),
+        _unit_row("Off EPA/g", c.get("u_off_epa_pg_home"), c.get("u_off_epa_pg_away"), home, away),
+        _unit_row("Def EPA/g (allowed)", c.get("u_def_epa_pg_home"), c.get("u_def_epa_pg_away"), home, away),
+        _unit_row("CPOE", c.get("u_cpoe_home"), c.get("u_cpoe_away"), home, away, digits=1),
+        _unit_row("Time to throw", c.get("u_ttt_home"), c.get("u_ttt_away"), home, away, digits=2),
+        _unit_row("RYOE (sum)", c.get("u_ryoe_home"), c.get("u_ryoe_away"), home, away, digits=0),
+        _unit_row("ST TDs", c.get("u_st_tds_home"), c.get("u_st_tds_away"), home, away, digits=0),
+        _unit_row("FG%", c.get("u_fg_home"), c.get("u_fg_away"), home, away, digits=2),
+        _unit_row("Punt net yds", c.get("u_punt_net_home"), c.get("u_punt_net_away"), home, away, digits=1),
     ]
-    st.dataframe(rows, hide_index=True, width="stretch")
+    st.markdown(_unit_table_html(rows, away, home), unsafe_allow_html=True)
 
-    st.markdown(
-        f"**OL {away}** {c.get('ol_away') or '—'}  \n"
-        f"**DL {home}** {c.get('dl_home') or '—'}  \n"
-        f"**OL {home}** {c.get('ol_home') or '—'}  \n"
-        f"**DL {away}** {c.get('dl_away') or '—'}"
-    )
-    s1, s2 = st.columns(2)
-    s1.markdown(
-        f"**{away} last-week snaps (50%+)**  \n"
-        f"off {c.get('snaps_off_away') or '—'}  \n"
-        f"def {c.get('snaps_def_away') or '—'}"
-    )
-    s2.markdown(
-        f"**{home} last-week snaps (50%+)**  \n"
-        f"off {c.get('snaps_off_home') or '—'}  \n"
-        f"def {c.get('snaps_def_home') or '—'}"
-    )
-    if c.get("u_top_rushers_home") or c.get("u_top_rushers_away"):
-        st.caption(
-            f"PFR rushers — {away}: {c.get('u_top_rushers_away') or '—'} · "
-            f"{home}: {c.get('u_top_rushers_home') or '—'}"
-        )
     r1, r2 = st.columns(2)
     r1.markdown(
-        f"**{away} last 3** off EPA/g {_fmt(c.get('rec_off_epa_pg_away'))} · "
-        f"def EPA/g {_fmt(c.get('rec_def_epa_pg_away'))} · "
-        f"TO {_fmt(c.get('rec_to_diff_away'), 1, True)}"
+        f"**Recent form (last 3 games)** — {away}  \n"
+        f"offense EPA per game {_fmt(c.get('rec_off_epa_pg_away'))} · "
+        f"defense EPA allowed per game {_fmt(c.get('rec_def_epa_pg_away'))} · "
+        f"turnover margin {_fmt(c.get('rec_to_diff_away'), 1, True)}"
     )
     r2.markdown(
-        f"**{home} last 3** off EPA/g {_fmt(c.get('rec_off_epa_pg_home'))} · "
-        f"def EPA/g {_fmt(c.get('rec_def_epa_pg_home'))} · "
-        f"TO {_fmt(c.get('rec_to_diff_home'), 1, True)}"
+        f"**Recent form (last 3 games)** — {home}  \n"
+        f"offense EPA per game {_fmt(c.get('rec_off_epa_pg_home'))} · "
+        f"defense EPA allowed per game {_fmt(c.get('rec_def_epa_pg_home'))} · "
+        f"turnover margin {_fmt(c.get('rec_to_diff_home'), 1, True)}"
     )
 
 
-def _board_html(cards: list[dict], season: int, week: int) -> str:
+def _render_game_chips(cards: list[dict], season: int, week: int, active: str | None) -> None:
+    per_row = 4
+    for i in range(0, len(cards), per_row):
+        cols = st.columns(per_row)
+        for j, c in enumerate(cards[i : i + per_row]):
+            gid = c.get("game_id") or ""
+            label = f"{c['away_team']} @ {c['home_team']}"
+            with cols[j]:
+                btn_type = "primary" if gid == active else "secondary"
+                if st.button(label, key=f"chip_{season}_{week}_{gid}", type=btn_type):
+                    _set_view(season, week, gid)
+                    st.rerun()
+
+
+def _render_board(cards: list[dict], season: int, week: int) -> None:
     show_score = any(c.get("home_score") is not None and c.get("away_score") is not None for c in cards)
-    head = ["When", "Matchup"]
+    widths = [1.1, 2.0, 0.9, 0.9, 0.8, 1.0, 2.2] if show_score else [1.1, 2.2, 0.9, 0.8, 1.0, 2.4]
+    hdr = st.columns(widths)
+    hdr[0].markdown("**When**")
+    hdr[1].markdown("**Matchup**")
+    idx = 2
     if show_score:
-        head.append("Score")
-    head += ["Spread", "Win%", "Venue", "Starters out"]
-    thead = "".join(f"<th>{html.escape(h)}</th>" for h in head)
-    body = []
+        hdr[idx].markdown("**Score**")
+        idx += 1
+    hdr[idx].markdown("**Spread**")
+    hdr[idx + 1].markdown("**Win%**")
+    hdr[idx + 2].markdown("**Venue**")
+    hdr[idx + 3].markdown("**Starters out**")
+
     for c in cards:
         home, away = c["home_team"], c["away_team"]
         gid = c.get("game_id") or ""
-        game_url = _href(season, week, gid)
-        inj_url = _href(season, week, gid, "injuries")
-        src = c.get("win_pct_source") or "unknown"
-        win = _pct(c.get("home_win_pct"))
-        if c.get("home_win_pct") is not None:
-            win = f"{win} {html.escape(home)}"
-        title = f"Win% from {src}"
-        away_out = html.escape(c.get("injuries_out_away") or "—")
-        home_out = html.escape(c.get("injuries_out_home") or "—")
-        inj = (
-            f'<div class="inj"><a href="{inj_url}" title="Open injury report">'
-            f"{html.escape(away)} {away_out}<br>{html.escape(home)} {home_out}</a></div>"
-        )
-        cells = [
-            html.escape(c.get("kickoff_pt") or ""),
-            f'<a href="{game_url}">{html.escape(away)} @ {html.escape(home)}</a>',
-        ]
+        cols = st.columns(widths)
+        cols[0].write(c.get("kickoff_pt") or "")
+        with cols[1]:
+            if st.button(f"{away} @ {home}", key=f"board_game_{season}_{week}_{gid}"):
+                _set_view(season, week, gid)
+                st.rerun()
+        col_i = 2
         if show_score:
             score = ""
             if c.get("home_score") is not None and c.get("away_score") is not None:
                 score = f"{int(c['away_score'])}–{int(c['home_score'])}"
-            cells.append(html.escape(score))
-        cells += [
-            html.escape(format_spread(c.get("spread_line"), home, away)),
-            f'<span class="win" title="{html.escape(title)}">{win}</span>',
-            html.escape(
-                _venue_text(c)
-            ),
-            inj,
-        ]
-        body.append("<tr>" + "".join(f"<td>{cell}</td>" for cell in cells) + "</tr>")
-    return (
-        '<div class="board-wrap"><table class="board">'
-        f"<thead><tr>{thead}</tr></thead><tbody>{''.join(body)}</tbody></table></div>"
-    )
-
+            cols[col_i].write(score)
+            col_i += 1
+        cols[col_i].write(format_spread(c.get("spread_line"), home, away))
+        src = c.get("win_pct_source") or "unknown"
+        win = _pct(c.get("home_win_pct"))
+        if c.get("home_win_pct") is not None:
+            win = f"{win} {html.escape(home)}"
+        title = html.escape(f"Win% from {src}")
+        cols[col_i + 1].markdown(
+            f'<span class="win" title="{title}">{html.escape(win)}</span>',
+            unsafe_allow_html=True,
+        )
+        cols[col_i + 2].write(_venue_text(c))
+        away_out = c.get("injuries_out_away") or "—"
+        home_out = c.get("injuries_out_home") or "—"
+        inj_label = f"{away}: {away_out} / {home}: {home_out}"
+        with cols[col_i + 3]:
+            if st.button(inj_label, key=f"board_inj_{season}_{week}_{gid}"):
+                _set_view(season, week, gid, "injuries")
+                st.rerun()
 
 def _venue_text(c: dict) -> str:
     if c.get("venue") != "outdoor":
@@ -313,15 +376,6 @@ def _venue_text(c: dict) -> str:
         bits.append(f"{float(c['wx_precip_in']):.2f} in")
     return " ".join(bits) or (c.get("weather_note") or "outdoor")
 
-
-def _game_grid(cards: list[dict], season: int, week: int, active: str | None) -> str:
-    chips = []
-    for c in cards:
-        gid = c.get("game_id") or ""
-        label = f"{c['away_team']} @ {c['home_team']}"
-        cls = "active" if gid == active else ""
-        chips.append(f'<a class="{cls}" href="{_href(season, week, gid)}">{html.escape(label)}</a>')
-    return '<div class="game-grid">' + "".join(chips) + "</div>"
 
 
 def main():
@@ -387,7 +441,7 @@ def main():
         if selected.get("away_score") is not None and selected.get("home_score") is not None:
             title += f"  ({int(selected['away_score'])}–{int(selected['home_score'])})"
         st.subheader(title)
-        st.markdown(_game_grid(cards, season, week, selected.get("game_id")), unsafe_allow_html=True)
+        _render_game_chips(cards, season, week, selected.get("game_id"))
         which = st.radio(
             "section",
             ["Matchup", "Injuries"],
@@ -402,9 +456,12 @@ def main():
         return
 
     st.markdown(f"**{season} week {week}**")
-    st.markdown(_game_grid(cards, season, week, None), unsafe_allow_html=True)
-    st.markdown(_board_html(cards, season, week), unsafe_allow_html=True)
-    st.caption("Hover Win% for the source (nfelo or moneyline). Click a matchup for the card, or starters out for the injury report.")
+    _render_game_chips(cards, season, week, None)
+    _render_board(cards, season, week)
+    st.caption(
+        "Hover Win% for the source (nfelo or moneyline). "
+        "Use the matchup button for the card, or starters out for the injury report."
+    )
 
 
 if __name__ == "__main__":
