@@ -136,13 +136,14 @@ class InterfaceTest(unittest.TestCase):
             "_render_league_injuries([{"
             "'away_team': 'BUF', 'home_team': 'KC', "
             "'injuries_away_rows': ["
-            "{'team': 'BUF', 'player': 'A IR', 'status': None, 'roster_status': 'ir', 'is_starter': True},"
-            "{'team': 'BUF', 'player': 'B PUP', 'status': None, 'roster_status': 'pup', 'is_starter': False},"
-            "{'team': 'BUF', 'player': 'C OUT', 'status': 'out', 'roster_status': None, 'is_starter': False}],"
-            "'injuries_home_rows': []}], 2026, 1)\n"
+            "{'team': 'BUF', 'player': 'A IR', 'status': None, 'roster_status': 'ir', 'is_starter': True, 'last_reported_week': 1},"
+            "{'team': 'BUF', 'player': 'B PUP', 'status': None, 'roster_status': 'pup', 'is_starter': False, 'last_reported_week': 1},"
+            "{'team': 'BUF', 'player': 'C OUT', 'status': 'out', 'roster_status': None, 'is_starter': False, 'last_reported_week': 1}],"
+            "'injuries_home_rows': []}], 2026, 2)\n"
         )
         app = AppTest.from_string(script).run()
         self.assertFalse(app.exception)
+        self.assertIn("Week 2 reports are not posted yet", app.info[0].value)
         roster_lists = app.multiselect[1]
         self.assertEqual(
             roster_lists.options,

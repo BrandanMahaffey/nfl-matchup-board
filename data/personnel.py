@@ -259,7 +259,7 @@ def _normalise_injury_rows(injuries: pl.DataFrame, through_week=None, teams=None
 
 
 def injury_state_history(injuries: pl.DataFrame, through_week=None, teams=None) -> list[dict]:
-    """Pure snapshots of normalized current state after each reported week."""
+    """Snapshots that retain each team's latest report until that team files again."""
     source = _normalise_injury_rows(injuries, through_week, teams)
     if not source:
         return []
@@ -268,11 +268,17 @@ def injury_state_history(injuries: pl.DataFrame, through_week=None, teams=None) 
     last_week = through_week if through_week is not None else max(row["week"] for row in source)
     weeks = range(first_week, last_week + 1)
     for current_week in weeks:
-        reported = {row["_identity"] for row in source if row["week"] == current_week}
+        current_rows = [row for row in source if row["week"] == current_week]
+        reported = {row["_identity"] for row in current_rows}
+        reporting_teams = {row["team"] for row in current_rows}
         for identity in list(states):
-            if states[identity]["_status_norm"] not in _PERSISTENT_STATUSES and identity not in reported:
+            if (
+                states[identity]["_status_norm"] not in _PERSISTENT_STATUSES
+                and states[identity]["team"] in reporting_teams
+                and identity not in reported
+            ):
                 del states[identity]
-        for row in (r for r in source if r["week"] == current_week):
+        for row in current_rows:
             identity, status = row["_identity"], row["_status_norm"]
             previous = states.get(identity)
             if status is None:

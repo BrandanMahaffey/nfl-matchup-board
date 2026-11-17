@@ -174,6 +174,28 @@ class PersonnelTests(TestCase):
         self.assertTrue(persistent["is_carried"])
         self.assertEqual(history[2]["rows"], [])
 
+    def test_next_week_retains_each_teams_latest_available_report(self):
+        injuries = pl.DataFrame(
+            {
+                "team": ["BUF", "KC", "BUF"],
+                "week": [10, 10, 11],
+                "gsis_id": ["buf-old", "kc-latest", "buf-current"],
+                "full_name": ["Buffalo Old", "Kansas City Latest", "Buffalo Current"],
+                "position": ["WR", "QB", "RB"],
+                "report_status": ["Out", "Questionable", None],
+                "practice_status": [None, None, "Limited Participation"],
+            }
+        )
+
+        current = personnel.derive_injury_states(injuries, through_week=11)
+
+        by_name = {row["full_name"]: row for row in current.iter_rows(named=True)}
+        self.assertEqual(set(by_name), {"Kansas City Latest", "Buffalo Current"})
+        self.assertTrue(by_name["Kansas City Latest"]["is_carried"])
+        self.assertEqual(by_name["Kansas City Latest"]["last_reported_week"], 10)
+        self.assertFalse(by_name["Buffalo Current"]["is_carried"])
+        self.assertEqual(by_name["Buffalo Current"]["last_reported_week"], 11)
+
     def test_injury_state_replacement_and_full_participation_resolution(self):
         injuries = pl.DataFrame(
             {

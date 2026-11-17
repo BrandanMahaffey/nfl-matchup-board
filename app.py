@@ -297,7 +297,7 @@ def _nan(val):
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading nflverse, nfelo and weather data…")
-def _cards(season: int, week: int, _ver: int = 5):
+def _cards(season: int, week: int, _ver: int = 6):
     return build_week_board(season, week)
 
 
@@ -874,6 +874,33 @@ _STATUS_RANK = {
 }
 
 
+def _injury_source_note(rows: list[dict], week: int) -> str | None:
+    source_weeks = sorted(
+        {
+            int(row["last_reported_week"])
+            for row in rows
+            if row.get("status") and row.get("last_reported_week") is not None
+        }
+    )
+    if not source_weeks:
+        return (
+            "No weekly game/practice report is available yet. "
+            "Roster-list players come from the latest weekly roster snapshot."
+        )
+    latest = source_weeks[-1]
+    if latest < week:
+        return (
+            f"Week {week} reports are not posted yet. Showing each team's latest available "
+            f"game/practice report (latest source: Week {latest})."
+        )
+    if source_weeks[0] < week:
+        return (
+            f"Week {week} reports are still arriving. Teams without a Week {week} filing "
+            "use their latest available game/practice report."
+        )
+    return None
+
+
 def _injury_table(rows: list[dict], with_game: str | None = None) -> list[dict]:
     table = []
     for r in rows:
@@ -952,6 +979,9 @@ def render_injuries(c: dict) -> None:
     if not rows:
         st.info("No injury or practice-report listings for this game yet.")
         return
+    source_note = _injury_source_note(rows, int(c.get("week") or 0))
+    if source_note:
+        st.info(source_note)
     rows.sort(
         key=lambda r: (
             _STATUS_RANK.get(r.get("status") or r.get("roster_status"), 9),
@@ -1294,6 +1324,9 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
     if not rows:
         st.info("No current injury-report or reserve-roster states through this week.")
         return
+    source_note = _injury_source_note(rows, week)
+    if source_note:
+        st.info(source_note)
 
     statuses = list(_STATUS_LABEL.values())
     roster_counts = {
