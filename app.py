@@ -24,6 +24,7 @@ from data.theme import THEME_IDS, apply as apply_theme, from_query as theme_from
 from data.personnel import injury_status_counts
 from data.schedules import format_kickoff_pt
 from data.teamref import display_color, division, logo_url, pair_colors, team_name
+from data.wide_stats import league_nflverse_rows, league_ngs_rows
 
 _ICON = Path(__file__).with_name("assets") / "nfl-board.png"
 st.set_page_config(
@@ -330,7 +331,7 @@ def _kickoff_label(c: dict) -> str:
 
 
 def _conditions_text(c: dict) -> str:
-    """One-line game conditions for the board."""
+    """Concise kickoff conditions for the board."""
     if c.get("venue") != "outdoor":
         return "Indoor"
     bits = []
@@ -339,10 +340,12 @@ def _conditions_text(c: dict) -> str:
     if temp is not None:
         bits.append(f"{float(temp):.0f}°F")
     if wind is not None:
-        bits.append(f"{float(wind):.0f} mph")
-    if c.get("wx_precip_in"):
-        bits.append(f"{float(c['wx_precip_in']):.2f}\" rain")
-    return " · ".join(bits) or (c.get("weather_note") or "Outdoor")
+        bits.append(f"{float(wind):.0f} mph wind")
+    if c.get("wx_rain_in"):
+        bits.append(f"{float(c['wx_rain_in']):.2f}\" rain")
+    if c.get("wx_snow_in"):
+        bits.append(f"{float(c['wx_snow_in']):.2f}\" snow")
+    return " · ".join(bits) or "Weather unavailable"
 
 
 def _status_counts(c: dict, side: str) -> tuple[int, int]:

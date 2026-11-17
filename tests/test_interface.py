@@ -27,6 +27,25 @@ def _matchup_script(card):
 
 
 class InterfaceTest(unittest.TestCase):
+    def test_mobile_card_uses_compact_weather_instead_of_outdoor_label(self):
+        from app import _conditions_text, _mobile_board
+
+        outdoor = {
+            **_CARD,
+            "game_id": "2026_01_BUF_KC",
+            "venue": "outdoor",
+            "wx_temp_f": 43.4,
+            "wx_wind_mph": 12.2,
+            "wx_rain_in": 0.08,
+            "wx_snow_in": 0.0,
+        }
+        self.assertEqual(_conditions_text(outdoor), '43°F · 12 mph wind · 0.08" rain')
+        rendered = _mobile_board([outdoor], 2026, 1, {"BUF": 1.2, "KC": 2.3})
+        self.assertIn("43°F · 12 mph wind", rendered)
+        self.assertNotIn("Conditions: Outdoor", rendered)
+        self.assertEqual(_conditions_text({"venue": "indoor"}), "Indoor")
+        self.assertEqual(_conditions_text({"venue": "outdoor"}), "Weather unavailable")
+
     def test_phone_card_preserves_game_context_and_missing_scores(self):
         card = {**_CARD, "game_id": "2026_01_BUF_KC", "home_score": 0, "away_score": 7}
         script = (

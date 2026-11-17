@@ -1,8 +1,8 @@
 """Game weather from schedule data and Open-Meteo forecasts."""
 
 from __future__ import annotations
-
-from datetime import date, datetime, time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 import httpx
@@ -62,8 +62,8 @@ def _empty_weather() -> pl.DataFrame:
             "game_id": pl.Series([], dtype=pl.Utf8),
             "temp_f": pl.Series([], dtype=pl.Float64),
             "wind_mph": pl.Series([], dtype=pl.Float64),
-            "precip_in": pl.Series([], dtype=pl.Float64),
-            "weather_note": pl.Series([], dtype=pl.Utf8),
+            "rain_in": pl.Series([], dtype=pl.Float64),
+            "snow_in": pl.Series([], dtype=pl.Float64),
         }
     )
 
@@ -111,10 +111,15 @@ def _fetch_forecast(lat: float, lon: float, day: date) -> dict[str, list] | None
     if cache_key in _FORECAST_CACHE:
         return _FORECAST_CACHE[cache_key]
 
+    historical = day < datetime.now(_EASTERN).date() - timedelta(days=5)
+    endpoint = (
+        "https://archive-api.open-meteo.com/v1/archive"
+        if historical
+        else "https://api.open-meteo.com/v1/forecast"
+    )
     url = (
-        "https://api.open-meteo.com/v1/forecast"
-        f"?latitude={lat}&longitude={lon}"
-        "&hourly=temperature_2m,wind_speed_10m,precipitation"
+        f"{endpoint}?latitude={lat}&longitude={lon}"
+        "&hourly=temperature_2m,wind_speed_10m,rain,snowfall"
         "&temperature_unit=fahrenheit&wind_speed_unit=mph&precipitation_unit=inch"
         "&timezone=America%2FNew_York"
         f"&start_date={day.isoformat()}&end_date={day.isoformat()}"
@@ -139,14 +144,15 @@ def _fetch_forecast(lat: float, lon: float, day: date) -> dict[str, list] | None
 
 def _nearest_hourly(
     hourly: dict[str, list], kickoff: datetime
-) -> tuple[float | None, float | None, float | None]:
+) -> tuple[float | None, float | None, float | None, float | None]:
     times = hourly.get("time")
     if not times:
-        return None, None, None
+        return None, None, None, None
 
     temps = hourly.get("temperature_2m", [])
     winds = hourly.get("wind_speed_10m", [])
-    precips = hourly.get("precipitation", [])
+    rain = hourly.get("rain", [])
+    snow = hourly.get("snowfall", [])
 
     best_idx = None
     best_delta = None
@@ -161,7 +167,7 @@ def _nearest_hourly(
             best_idx = idx
 
     if best_idx is None:
-        return None, None, None
+        return None, None, None, None
 
     def _at(series: list, index: int) -> float | None:
         if index >= len(series):
@@ -174,20 +180,16 @@ def _nearest_hourly(
         except (TypeError, ValueError):
             return None
 
-    return _at(temps, best_idx), _at(winds, best_idx), _at(precips, best_idx)
+    return _at(temps, best_idx), _at(winds, best_idx), _at(rain, best_idx), _at(snow, best_idx)
 
 
-def _weather_note(temp_f: float | None, wind_mph: float | None, precip_in: float | None) -> str | None:
-    parts: list[str] = []
-    if temp_f is not None:
-        parts.append(f"{temp_f:.0f}°F")
-    if wind_mph is not None:
-        parts.append(f"wind {wind_mph:.0f} mph")
-    if precip_in is not None and precip_in > 0:
-        parts.append(f"precip {precip_in:.2f} in")
-    if not parts:
-        return None
-    return ", ".join(parts)
+def _game_forecast(game: dict[str, object]) -> tuple[datetime | None, dict[str, list] | None]:
+    stadium_id = game.get("stadium_id")
+    coords = STADIUMS.get(str(stadium_id)) if stadium_id is not None else None
+    kickoff = _kickoff_datetime(game.get("gameday"), game.get("gametime"))
+    if coords is None or kickoff is None:
+        return kickoff, None
+    return kickoff, _fetch_forecast(*coords, kickoff.date())
 
 
 def weather_for_games(games: pl.DataFrame) -> pl.DataFrame:
@@ -195,8 +197,20 @@ def weather_for_games(games: pl.DataFrame) -> pl.DataFrame:
     if games.is_empty() or "game_id" not in games.columns:
         return _empty_weather()
 
+    game_rows = games.to_dicts()
+    outdoor_games = [
+        game for game in game_rows if str(game.get("venue") or "").lower() == "outdoor"
+    ]
+    forecasts: dict[object, tuple[datetime | None, dict[str, list] | None]] = {}
+    if outdoor_games:
+        with ThreadPoolExecutor(max_workers=min(8, len(outdoor_games))) as executor:
+            forecasts = {
+                game.get("game_id"): forecast
+                for game, forecast in zip(outdoor_games, executor.map(_game_forecast, outdoor_games))
+            }
+
     rows: list[dict[str, object]] = []
-    for game in games.to_dicts():
+    for game in game_rows:
         game_id = game.get("game_id")
         venue = str(game.get("venue") or "").lower()
         home_score = game.get("home_score")
@@ -205,8 +219,8 @@ def weather_for_games(games: pl.DataFrame) -> pl.DataFrame:
             "game_id": game_id,
             "temp_f": None,
             "wind_mph": None,
-            "precip_in": None,
-            "weather_note": None,
+            "rain_in": None,
+            "snow_in": None,
         }
 
         if venue == "indoor":
@@ -222,33 +236,24 @@ def weather_for_games(games: pl.DataFrame) -> pl.DataFrame:
             wind = game.get("wind")
             row["temp_f"] = float(temp) if temp is not None else None
             row["wind_mph"] = float(wind) if wind is not None else None
-            row["weather_note"] = _weather_note(row["temp_f"], row["wind_mph"], None)
-            rows.append(row)
-            continue
 
-        stadium_id = game.get("stadium_id")
-        coords = STADIUMS.get(str(stadium_id)) if stadium_id is not None else None
-        kickoff = _kickoff_datetime(game.get("gameday"), game.get("gametime"))
-        if coords is None or kickoff is None:
-            rows.append(row)
-            continue
-
-        lat, lon = coords
-        forecast = _fetch_forecast(lat, lon, kickoff.date())
+        kickoff, forecast = forecasts.get(game_id, (None, None))
         if forecast is None:
             rows.append(row)
             continue
 
-        temp_f, wind_mph, precip_in = _nearest_hourly(forecast, kickoff)
-        row["temp_f"] = temp_f
-        row["wind_mph"] = wind_mph
-        row["precip_in"] = precip_in
-        row["weather_note"] = _weather_note(temp_f, wind_mph, precip_in)
+        temp_f, wind_mph, rain_in, snow_in = _nearest_hourly(forecast, kickoff)
+        if row["temp_f"] is None:
+            row["temp_f"] = temp_f
+        if row["wind_mph"] is None:
+            row["wind_mph"] = wind_mph
+        row["rain_in"] = rain_in
+        row["snow_in"] = snow_in
         rows.append(row)
 
     if not rows:
         return _empty_weather()
 
     return pl.DataFrame(rows).select(
-        "game_id", "temp_f", "wind_mph", "precip_in", "weather_note"
+        "game_id", "temp_f", "wind_mph", "rain_in", "snow_in"
     )
