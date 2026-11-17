@@ -34,6 +34,18 @@ _STATUS_ORDER = {
 _OFFICIAL_STATUSES = {"out", "doubtful", "questionable", "ir", "pup", "nfi", "suspended"}
 _PERSISTENT_STATUSES = {"ir", "pup", "nfi", "suspended"}
 
+_RESERVE_STATUS_CODES = {
+    "R01": "ir",
+    "R04": "pup",
+    "R05": "nfi",
+    "R48": "ir",
+}
+_DIRECT_ROSTER_STATUSES = {
+    "PUP": "pup",
+    "RSN": "nfi",
+    "SUS": "suspended",
+}
+
 
 def _empty_injuries() -> pl.DataFrame:
     return pl.DataFrame(
@@ -50,6 +62,7 @@ def _empty_injuries() -> pl.DataFrame:
             "first_reported_week": pl.Int64,
             "last_reported_week": pl.Int64,
             "is_carried": pl.Boolean,
+            "roster_status": pl.String,
             "is_key": pl.Boolean,
         }
     )
@@ -198,6 +211,15 @@ def _full_participation(row: dict) -> bool:
     return False
 
 
+def _roster_status(status: object, description_abbr: object) -> str | None:
+    status_code = str(status or "").strip().upper()
+    if status_code in _DIRECT_ROSTER_STATUSES:
+        return _DIRECT_ROSTER_STATUSES[status_code]
+    if status_code == "RES":
+        return _RESERVE_STATUS_CODES.get(str(description_abbr or "").strip().upper())
+    return None
+
+
 def _injury_identity(row: dict) -> tuple[str, str]:
     team = canonical(row.get("team") or "")
     gid = str(row.get("gsis_id") or "").strip()
@@ -286,12 +308,109 @@ def derive_injury_states(injuries: pl.DataFrame, through_week: int, teams=None) 
     return pl.DataFrame(history[-1]["rows"])
 
 
-def key_injuries(season: int, week: int, teams: list[str]) -> pl.DataFrame:
-    url = f"{RELEASE}/injuries/injuries_{season}.csv"
-    try:
-        df = derive_injury_states(load_csv(url), week, teams)
-    except DataLoadError:
+def derive_roster_designations(
+    rosters: pl.DataFrame,
+    through_week: int,
+    teams=None,
+) -> pl.DataFrame:
+    """Current IR/PUP/NFI/suspension state from the weekly roster snapshot."""
+    required = {"team", "week", "status", "status_description_abbr"}
+    if rosters is None or rosters.is_empty() or not required.issubset(rosters.columns):
         return _empty_injuries()
+    allowed = _team_set(teams or []) if teams else None
+    histories: dict[tuple[str, str], list[dict]] = {}
+    for order, source in enumerate(rosters.iter_rows(named=True)):
+        game_type = str(source.get("game_type") or "REG").upper()
+        if game_type != "REG":
+            continue
+        try:
+            source_week = int(source.get("week"))
+        except (TypeError, ValueError):
+            continue
+        if source_week > through_week:
+            continue
+        team = canonical(source.get("team") or "")
+        if allowed is not None and team not in allowed:
+            continue
+        name = source.get("full_name") or source.get("football_name") or ""
+        row = {
+            "season": source.get("season"),
+            "team": team,
+            "week": source_week,
+            "gsis_id": source.get("gsis_id"),
+            "position": source.get("position"),
+            "full_name": name,
+            "report_status": None,
+            "report_primary_injury": None,
+            "practice_status": None,
+            "_source_order": order,
+            "_roster_status": _roster_status(
+                source.get("status"),
+                source.get("status_description_abbr"),
+            ),
+        }
+        histories.setdefault(_injury_identity(row), []).append(row)
+
+    snapshot_week = max(
+        row["week"]
+        for history in histories.values()
+        for row in history
+    ) if histories else None
+    current = []
+    for history in histories.values():
+        history.sort(key=lambda row: (row["week"], row["_source_order"]))
+        latest = history[-1]
+        if latest["week"] != snapshot_week:
+            continue
+        roster_status = latest["_roster_status"]
+        if roster_status is None:
+            continue
+        first_week = latest["week"]
+        for previous in reversed(history[:-1]):
+            if previous["_roster_status"] != roster_status:
+                break
+            first_week = min(first_week, previous["week"])
+        current.append(
+            {
+                **{k: v for k, v in latest.items() if not k.startswith("_")},
+                "first_reported_week": first_week,
+                "last_reported_week": latest["week"],
+                "is_carried": latest["week"] != through_week,
+                "is_key": _is_key_position(latest.get("position")),
+                "roster_status": roster_status,
+            }
+        )
+    return pl.DataFrame(current) if current else _empty_injuries()
+
+
+def _merge_injury_states(injuries: pl.DataFrame, roster: pl.DataFrame) -> pl.DataFrame:
+    merged: dict[tuple[str, str], dict] = {}
+    for source in injuries.iter_rows(named=True):
+        row = dict(source)
+        row["roster_status"] = None
+        merged[_injury_identity(row)] = row
+    for source in roster.iter_rows(named=True):
+        row = dict(source)
+        identity = _injury_identity(row)
+        if identity in merged:
+            merged[identity]["roster_status"] = row.get("roster_status")
+        else:
+            merged[identity] = row
+    return pl.DataFrame(list(merged.values())) if merged else _empty_injuries()
+
+
+def key_injuries(season: int, week: int, teams: list[str]) -> pl.DataFrame:
+    injury_url = f"{RELEASE}/injuries/injuries_{season}.csv"
+    roster_url = f"{RELEASE}/weekly_rosters/roster_weekly_{season}.csv"
+    try:
+        injuries = derive_injury_states(load_csv(injury_url), week, teams)
+    except DataLoadError:
+        injuries = _empty_injuries()
+    try:
+        roster = derive_roster_designations(load_csv(roster_url), week, teams)
+    except DataLoadError:
+        roster = _empty_injuries()
+    df = _merge_injury_states(injuries, roster)
     if df.is_empty():
         return df
     official = pl.col("report_status").map_elements(_normalize_status, return_dtype=pl.String)
@@ -304,12 +423,16 @@ def key_injuries(season: int, week: int, teams: list[str]) -> pl.DataFrame:
         pl.when(pl.col("_official").is_not_null()).then(pl.col("_official"))
         .when(pl.col("_practice").is_in(["dnp", "limited"])).then(pl.col("_practice"))
         .otherwise(None).alias("_status_norm")
-    ).filter(pl.col("_status_norm").is_not_null())
+    ).filter(
+        pl.col("_status_norm").is_not_null() | pl.col("roster_status").is_not_null()
+    )
     if df.is_empty():
         return _empty_injuries()
     return df.with_columns(
         pl.col("position").map_elements(_is_key_position, return_dtype=pl.Boolean).alias("is_key"),
-        pl.col("_status_norm").replace_strict(_STATUS_ORDER, default=99).alias("_status_rank"),
+        pl.coalesce("_status_norm", "roster_status")
+        .replace_strict(_STATUS_ORDER, default=99)
+        .alias("_status_rank"),
     ).sort(["_status_rank", "is_key"], descending=[False, True]).drop(
         "_status_norm", "_status_rank", "_official", "_practice"
     )
@@ -467,7 +590,8 @@ def injury_records(
     rows: list[dict] = []
     for row in sub.iter_rows(named=True):
         status = _row_status(row.get("report_status"), row.get("practice_status"))
-        if status is None:
+        roster_status = row.get("roster_status")
+        if status is None and roster_status is None:
             continue
         name = (row.get("full_name") or "").strip()
         if not name:
@@ -481,6 +605,7 @@ def injury_records(
                 "player": name,
                 "position": (row.get("position") or "").strip().upper(),
                 "status": status,
+                "roster_status": roster_status,
                 "injury": injury,
                 "practice": (row.get("practice_status") or "").strip(),
                 "is_starter": is_starter,
@@ -490,7 +615,13 @@ def injury_records(
                 "is_carried": bool(row.get("is_carried", False)),
             }
         )
-    rows.sort(key=lambda r: (0 if r["is_starter"] else 1, _STATUS_ORDER.get(r["status"], 9), r["player"]))
+    rows.sort(
+        key=lambda r: (
+            0 if r["is_starter"] else 1,
+            _STATUS_ORDER.get(r["status"] or r["roster_status"], 9),
+            r["player"],
+        )
+    )
     return rows
 
 

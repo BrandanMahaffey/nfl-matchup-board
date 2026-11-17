@@ -91,6 +91,7 @@ class InterfaceTest(unittest.TestCase):
             "player": "<A & B>",
             "position": "QB",
             "status": "questionable",
+            "roster_status": "pup",
             "is_starter": True,
             "injury": "肩 <ankle>",
             "practice": "Limited",
@@ -101,11 +102,11 @@ class InterfaceTest(unittest.TestCase):
         }]
         rendered = _mobile_injury_cards(rows, with_game=True)
         for label in (
-            "Team", "Player", "Pos", "Status", "Starter", "Injury", "Practice",
+            "Team", "Player", "Pos", "Status", "Roster", "Starter", "Injury", "Practice",
             "Since", "Last report", "Game",
         ):
             self.assertIn(label, rendered)
-        for value in ("BUF", "QB", "Questionable", "Yes", "Limited", "Wk 2", "Wk 4 · carried", "Thursday"):
+        for value in ("BUF", "QB", "Questionable", "PUP", "Yes", "Limited", "Wk 2", "Wk 4 · carried", "Thursday"):
             self.assertIn(value, rendered)
         self.assertIn("&lt;A &amp; B&gt;", rendered)
         self.assertIn("&lt;ankle&gt;", rendered)
@@ -129,25 +130,28 @@ class InterfaceTest(unittest.TestCase):
         self.assertRegex(source, r"(?is)glossary.{0,250}(overflow|scroll)")
         self.assertRegex(source, r"(?is)reference.{0,250}(overflow|scroll)")
 
-    def test_injury_status_options_include_ir_and_filter(self):
+    def test_injury_roster_category_filter_includes_ir_and_pup(self):
         script = (
             "from app import _render_league_injuries\n"
-            "_render_league_injuries([{" 
+            "_render_league_injuries([{"
             "'away_team': 'BUF', 'home_team': 'KC', "
             "'injuries_away_rows': ["
-            "{'team': 'BUF', 'player': 'A IR', 'status': 'ir', 'is_starter': True},"
-            "{'team': 'BUF', 'player': 'B OUT', 'status': 'out', 'is_starter': False}],"
+            "{'team': 'BUF', 'player': 'A IR', 'status': None, 'roster_status': 'ir', 'is_starter': True},"
+            "{'team': 'BUF', 'player': 'B PUP', 'status': None, 'roster_status': 'pup', 'is_starter': False},"
+            "{'team': 'BUF', 'player': 'C OUT', 'status': 'out', 'roster_status': None, 'is_starter': False}],"
             "'injuries_home_rows': []}], 2026, 1)\n"
         )
         app = AppTest.from_string(script).run()
         self.assertFalse(app.exception)
-        statuses = app.multiselect[0]
-        self.assertIn("IR", statuses.options)
-        self.assertIn("Suspended", statuses.options)
-        statuses.set_value(["IR"]).run()
+        self.assertNotIn("IR", app.multiselect[0].options)
+        categories = app.selectbox[0]
+        self.assertIn("IR", categories.options)
+        self.assertIn("PUP", categories.options)
+        categories.set_value("IR").run()
         self.assertFalse(app.exception)
         self.assertIn("A IR", str(app.dataframe[0].value))
-        self.assertNotIn("B OUT", str(app.dataframe[0].value))
+        self.assertNotIn("B PUP", str(app.dataframe[0].value))
+        self.assertNotIn("C OUT", str(app.dataframe[0].value))
 
 
 if __name__ == "__main__":

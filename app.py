@@ -854,6 +854,8 @@ _STATUS_LABEL = {
     "dnp": "DNP",
     "limited": "Limited",
     "questionable": "Questionable",
+}
+_ROSTER_LABEL = {
     "ir": "IR",
     "pup": "PUP",
     "nfi": "NFI",
@@ -882,6 +884,7 @@ def _injury_table(rows: list[dict], with_game: str | None = None) -> list[dict]:
             "Player": r.get("player"),
             "Pos": r.get("position") or "",
             "Status": _STATUS_LABEL.get(r.get("status"), r.get("status") or ""),
+            "Roster": _ROSTER_LABEL.get(r.get("roster_status"), r.get("roster_status") or ""),
             "Starter": bool(r.get("is_starter")),
             "Injury": r.get("injury") or "",
             "Practice": r.get("practice") or "",
@@ -928,7 +931,8 @@ _INJURY_CONFIG = {
     "Team": st.column_config.TextColumn("Team", width=70),
     "Player": st.column_config.TextColumn("Player", width="medium"),
     "Pos": st.column_config.TextColumn("Pos", help="Listed position", width=60),
-    "Status": st.column_config.TextColumn("Status", help="Official game status, or DNP / limited from practice when Friday designations are not posted yet", width=120),
+    "Status": st.column_config.TextColumn("Status", help="Official game status, or DNP / limited from practice when game designations are not posted yet", width=120),
+    "Roster": st.column_config.TextColumn("Roster", help="Weekly roster designation: IR, PUP, NFI, or suspended", width=90),
     "Starter": st.column_config.CheckboxColumn("Starter", help="Rank-one on the depth chart or a heavy snap player last week", width=80),
     "Injury": st.column_config.TextColumn("Injury", width="small"),
     "Practice": st.column_config.TextColumn("Practice", help="Most recent practice participation", width="medium"),
@@ -948,7 +952,13 @@ def render_injuries(c: dict) -> None:
     if not rows:
         st.info("No injury or practice-report listings for this game yet.")
         return
-    rows.sort(key=lambda r: (_STATUS_RANK.get(r.get("status"), 9), not r.get("is_starter"), r.get("team") or ""))
+    rows.sort(
+        key=lambda r: (
+            _STATUS_RANK.get(r.get("status") or r.get("roster_status"), 9),
+            not r.get("is_starter"),
+            r.get("team") or "",
+        )
+    )
     st.markdown(_mobile_injury_cards(rows), unsafe_allow_html=True)
     st.container(key="game_injury_table").dataframe(
         _injury_table(rows),
@@ -958,9 +968,8 @@ def render_injuries(c: dict) -> None:
         column_config=_INJURY_CONFIG,
     )
     st.caption(
-        "Current state through the selected week. Weekly Out / Doubtful / Questionable and practice "
-        "designations clear when absent from a later report; IR / PUP / NFI / suspension carry forward "
-        "from their last source week until superseded."
+        "Weekly game and practice designations come from nflverse injury reports. "
+        "IR / PUP / NFI / suspension come from the selected week's nflverse roster snapshot."
     )
 
 
@@ -1283,37 +1292,56 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
         for r in list(c.get("injuries_away_rows") or []) + list(c.get("injuries_home_rows") or []):
             rows.append({**r, "game": game})
     if not rows:
-        st.info("No current injury states through this week.")
+        st.info("No current injury-report or reserve-roster states through this week.")
         return
 
     statuses = list(_STATUS_LABEL.values())
-    f1, f2, f3 = st.container(key="league_injury_filters").columns([2.2, 2.8, 1.6], vertical_alignment="bottom")
+    categories = ["All players", "Weekly report only", *_ROSTER_LABEL.values()]
+    f1, f2, f3, f4 = st.container(key="league_injury_filters").columns(
+        [2.2, 2.0, 2.8, 1.6],
+        vertical_alignment="bottom",
+    )
     with f1:
         picked_status = st.multiselect(
-            "Status", statuses, default=statuses, placeholder="All statuses",
+            "Game/practice status", statuses, default=statuses, placeholder="No weekly statuses",
             label_visibility="collapsed", key="inj_status"
-        ) or statuses
+        )
     with f2:
+        picked_category = st.selectbox(
+            "Report category", categories, label_visibility="collapsed", key="inj_category"
+        )
+    with f3:
         teams = sorted({r.get("team") for r in rows if r.get("team")})
         picked_teams = st.multiselect(
             "Teams", teams, placeholder="All teams", label_visibility="collapsed", key="inj_teams"
         )
-    with f3:
+    with f4:
         starters_only = st.toggle("Starters only", key="inj_starters")
+
+    def category_matches(row: dict) -> bool:
+        weekly_match = _STATUS_LABEL.get(row.get("status"), "") in picked_status
+        roster_label = _ROSTER_LABEL.get(row.get("roster_status"), "")
+        if picked_category == "All players":
+            return weekly_match or bool(roster_label)
+        if picked_category == "Weekly report only":
+            return weekly_match
+        return roster_label == picked_category
 
     filtered = [
         r
         for r in rows
-        if _STATUS_LABEL.get(r.get("status"), "") in picked_status
+        if category_matches(r)
         and (not picked_teams or r.get("team") in picked_teams)
         and (not starters_only or r.get("is_starter"))
     ]
     out_n = sum(1 for r in filtered if r.get("status") == "out")
+    reserve_n = sum(1 for r in filtered if r.get("roster_status"))
     start_n = sum(1 for r in filtered if r.get("is_starter"))
     st.markdown(
         '<div class="chips">'
         f"<div class='chip'><b>{len(filtered)}</b><span>listed</span></div>"
         f"<div class='chip'><b>{out_n}</b><span>ruled out</span></div>"
+        f"<div class='chip'><b>{reserve_n}</b><span>roster list</span></div>"
         f"<div class='chip'><b>{start_n}</b><span>starters</span></div>"
         "</div>",
         unsafe_allow_html=True,
@@ -1322,7 +1350,13 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
         st.info("No players match those filters.")
         return
 
-    filtered.sort(key=lambda r: (_STATUS_RANK.get(r.get("status"), 9), not r.get("is_starter"), r.get("team") or ""))
+    filtered.sort(
+        key=lambda r: (
+            _STATUS_RANK.get(r.get("status") or r.get("roster_status"), 9),
+            not r.get("is_starter"),
+            r.get("team") or "",
+        )
+    )
     table = []
     for r in filtered:
         entry = _injury_table([r], with_game=r.get("game"))[0]
@@ -1336,9 +1370,9 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
         column_config={**_INJURY_CONFIG, "Game": st.column_config.TextColumn("Game", width=110)},
     )
     st.caption(
-        "Source: nflverse weekly injury reports. The selected week shows current weekly designations plus "
-        "unresolved IR / PUP / NFI / suspension states carried from their latest report. Since and Last report "
-        "retain source-week context; selecting an earlier week reconstructs that historical snapshot. "
+        "Source: nflverse weekly injury reports and weekly roster snapshots. Game/practice statuses "
+        "clear when absent from a later report. IR, PUP, NFI, and suspension reflect the roster state "
+        "through the selected week. Since and Last report retain source-week context. "
         "Starters come from depth charts and last week's snap counts."
     )
 

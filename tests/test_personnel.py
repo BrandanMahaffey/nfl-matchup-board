@@ -83,6 +83,76 @@ class PersonnelTests(TestCase):
             result = personnel.key_injuries(2024, 1, ["LA"])
         self.assertEqual(result.get_column("team").to_list(), ["LA"])
 
+    def test_weekly_roster_designations_map_reserve_categories(self):
+        rosters = pl.DataFrame(
+            {
+                "season": [2025] * 8,
+                "team": ["LAR", "LAR", "LAR", "GB", "GB", "KC", "KC", "NE"],
+                "week": [1, 2, 3, 3, 3, 3, 3, 2],
+                "game_type": ["REG"] * 8,
+                "gsis_id": ["ir"] * 3 + ["pup", "nfi", "sus", "other", "stale"],
+                "position": ["QB", "QB", "QB", "RB", "WR", "DL", "WR", "TE"],
+                "full_name": ["IR Player"] * 3 + ["PUP Player", "NFI Player", "Suspended", "Other", "Stale"],
+                "status": ["ACT", "RES", "RES", "RES", "RES", "SUS", "RES", "RES"],
+                "status_description_abbr": [None, "R01", "R48", "R04", "R05", None, "R06", "R01"],
+            }
+        )
+
+        result = personnel.derive_roster_designations(rosters, through_week=3)
+
+        by_name = {row["full_name"]: row for row in result.iter_rows(named=True)}
+        self.assertEqual(set(by_name), {"IR Player", "PUP Player", "NFI Player", "Suspended"})
+        self.assertEqual(by_name["IR Player"]["team"], "LA")
+        self.assertEqual(by_name["IR Player"]["roster_status"], "ir")
+        self.assertEqual(by_name["IR Player"]["first_reported_week"], 2)
+        self.assertEqual(by_name["PUP Player"]["roster_status"], "pup")
+        self.assertEqual(by_name["NFI Player"]["roster_status"], "nfi")
+        self.assertEqual(by_name["Suspended"]["roster_status"], "suspended")
+
+    def test_key_injuries_merges_weekly_report_and_roster_snapshot(self):
+        injuries = pl.DataFrame(
+            {
+                "team": ["BUF"],
+                "week": [3],
+                "gsis_id": ["same"],
+                "position": ["QB"],
+                "full_name": ["Weekly and IR"],
+                "report_status": ["Questionable"],
+                "report_primary_injury": ["knee"],
+                "practice_status": ["Limited Participation"],
+            }
+        )
+        rosters = pl.DataFrame(
+            {
+                "season": [2025, 2025],
+                "team": ["BUF", "BUF"],
+                "week": [3, 3],
+                "game_type": ["REG", "REG"],
+                "gsis_id": ["same", "reserve-only"],
+                "position": ["QB", "WR"],
+                "full_name": ["Weekly and IR", "Reserve Only"],
+                "status": ["RES", "RES"],
+                "status_description_abbr": ["R01", "R04"],
+            }
+        )
+
+        with patch.object(personnel, "load_csv", side_effect=[injuries, rosters]):
+            result = personnel.key_injuries(2025, 3, ["BUF"])
+
+        rows = {row["full_name"]: row for row in result.iter_rows(named=True)}
+        self.assertEqual(set(rows), {"Weekly and IR", "Reserve Only"})
+        self.assertEqual(rows["Weekly and IR"]["report_status"], "Questionable")
+        self.assertEqual(rows["Weekly and IR"]["roster_status"], "ir")
+        self.assertEqual(rows["Reserve Only"]["roster_status"], "pup")
+        records = personnel.injury_records(result, None, None, "BUF")
+        self.assertEqual(
+            {(row["player"], row["status"], row["roster_status"]) for row in records},
+            {
+                ("Weekly and IR", "questionable", "ir"),
+                ("Reserve Only", None, "pup"),
+            },
+        )
+
     def test_injury_state_history_carries_persistent_and_expires_weekly(self):
         injuries = pl.DataFrame(
             {
