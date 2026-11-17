@@ -1,35 +1,87 @@
 # NFL Matchup Board
 
-Weekly football-pool comparison board. One join per game: nflverse team form, injuries, depth charts and snap counts, PFF pressure, Next Gen Stats, nfelo (or the moneyline), and outdoor weather.
+Weekly football-pool comparison board. It puts one join per game in front of you: nflverse team form, injuries, depth charts and snap counts, PFR pressure, Next Gen Stats, nfelo (or the moneyline), and outdoor weather. Numbers are context, not predicted scores, and there is no paid odds API.
 
-No paid odds API. Numbers are context, not predicted scores.
+## Pages and game details
 
-## Pages
+The hub has seven tabs:
 
-- **Week board** — every game in one sortable grid: kickoff in Pacific, spread, home win probability, total, conditions, out/questionable counts, and the biggest statistical mismatch. Tick a row to open that game.
-- **Game page** — hero card with both clubs, market and nfelo numbers, why the game stands out, availability, and side-by-side comparison bars grouped into passing, rushing, trenches, scoring and special teams. A second tab holds the full injury report.
-- **Teams** — season-to-date form for all 32 clubs, ranked by nfelo, filterable by conference.
-- **Injuries** — the whole week's report with status, team and starters-only filters.
+- **Matchups** — every game in a sortable grid with Pacific kickoff, matchup, score, spread, home win probability, total, conditions, and adjusted net. Weekly injury counts and the largest mismatch appear in the summary above the grid. Select a row to open its game.
+- **Power ratings** — season-to-date nfelo ratings and comparisons.
+- **Team stats** — season-to-date team form and league comparisons.
+- **Adjusted EPA** — opponent-adjusted offense, defense, and net views, with a Special teams subview.
+- **nflverse** — nflverse team aggregate tables.
+- **Next Gen** — Next Gen Stats team aggregate views.
+- **Injury report** — the week's report with status, team, and starters-only filters.
 
-Every column header and metric label carries a hover definition, and each page has a "What the numbers mean" glossary.
+The **game detail** view has a matchup hero (clubs, market and nfelo numbers), the reason the game stands out, availability, and side-by-side bars for passing, rushing, trenches, scoring, and special teams. Its **Injuries** section contains the full game injury report. The game detail view includes the metric glossary.
 
-## Local
+## Local setup
+
+Python 3.14 is the supported runtime. From PowerShell:
+
+```powershell
+cd nfl-matchup-board
+py -3.14 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -r requirements.txt
+python -m streamlit run app.py
+```
+
+From Unix (including Omarchy):
 
 ```bash
 cd nfl-matchup-board
-python3 -m venv .venv
+python3.14 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
-streamlit run app.py
+python -m pip install -r requirements.txt
+python -m streamlit run app.py
 ```
 
-On Omarchy, Super+Space → **NFL Board** starts the local server and opens it as a web app (`scripts/nfl-board`).
+On **Windows**, double-click **NFL Board** on the Desktop (or Start Menu). It starts the local server if needed and opens the board in your browser. The installer is:
 
-## Streamlit Community Cloud (private family invite)
+```powershell
+powershell -ExecutionPolicy Bypass -File packaging/install-windows-app.ps1
+```
 
-1. Push this repo to GitHub (private is fine).
-2. https://share.streamlit.io → New app → this repo, `app.py`, Python 3.12+.
-3. App settings → **Make app private** → invite family emails.
-4. Cloud sleeps when idle; first open after sleep takes ~30s.
+On **Omarchy**, Super+Space → **NFL Board** starts the local server and opens it as a web app (`scripts/nfl-board`).
 
-Data URLs are public nflverse / nfelo / Open-Meteo. No extra accounts.
+There is no static build: this is a Streamlit WebSocket server. For a production-like local check, run `python -m compileall -q app.py data tests`, `python -m unittest discover -s tests -v`, and `python -m pip check`, then start the headless server:
+
+```bash
+python -m streamlit run app.py --server.headless true
+```
+
+`NFL_BOARD_PORT` is an optional local-launcher port override. For a server command, use Streamlit's `--server.port` and `--server.address` options (or `STREAMLIT_SERVER_PORT` and `STREAMLIT_SERVER_ADDRESS`).
+
+## Streamlit Community Cloud
+
+This is a Streamlit server application with server-side data fetches and WebSockets; static hosting and SPA fallback configuration are not supported.
+
+Deployment requires GitHub access to the repository and a Streamlit Community Cloud account. Commit and push the complete application—not only `app.py`—including `data/`, `assets/`, `requirements.txt`, `runtime.txt`, and `.streamlit/config.toml`.
+
+1. Push the reviewed repository to GitHub: `BrandanMahaffey/nfl-matchup-board`, branch `main`.
+2. In Community Cloud, choose **New app**, that repository/branch, and entrypoint `app.py`.
+3. In **Advanced settings**, select **Python 3.14**. `runtime.txt` remains runtime metadata for local or other hosted use; it does not select the Community Cloud interpreter. If Python 3.14 is unavailable in the selector, choose a supported version offered by the platform, run the local production check with it, and redeploy after selecting the final version.
+4. No secrets or API keys are required. Current providers are public feeds fetched by the server; browsers receive no provider credentials. Future credentials belong in Cloud Secrets as `st.secrets`; locally use ignored `.streamlit/secrets.toml`. Never put secrets in client code or URLs.
+5. Choose public or private sharing deliberately. For a private app, configure allowed viewers/invites in sharing settings.
+6. Share the resulting `streamlit.app` URL. Existing query parameters such as `?season=2025&week=10&game=...` can be shared as deep links.
+
+Cloud can sleep and cold-start time is variable, and public feeds can be unavailable, rate-limited, or change schema. Do not promise a fixed wake-up time.
+
+## Data, coverage, and operational limits
+
+- Public feeds can be slow, unavailable, rate-limited, or change schema. Source and derived layers cache for one hour; live scores are not cached, so layered caches can make freshness approach two hours.
+- External ESPN logos can fail independently of the board.
+- Play-by-play data can use substantial memory. Supported seasons are hardcoded to **2024–2026**, with a regular-season selector. Statistics through the prior week are available; week 1 has blank prior-week comparisons.
+- nfelo is a current snapshot, not a historical archive: no future or cross-season ratings are implied. Mixed bye weeks are allowed when data exists up to the requested week. Within-week updates are not strict historical pregame snapshots.
+- Historical 2024 depth weekly charts have coarse timestamps; newer charts use a timestamp cutoff. **Pressure %** is the most-pressured-QB weekly rate, not total pressure counts across all quarterbacks.
+- Mandatory schedule failures stop with an error. Optional source failures show a warning or missing values rather than silently presenting healthy-looking zeros.
+
+## Maintenance priorities
+
+1. **Highest value / medium risk:** archive point-in-time feeds with coverage metadata, so historical views can be reproduced.
+2. **Medium value / low-to-medium risk:** project play-by-play and other heavy data behind measured, lazy-loaded tabs to reduce memory.
+3. **Low value / higher churn:** split the large app only if growth requires it. Avoid speculative redesign.
+
+Primary references: [Streamlit Community Cloud deployment](https://docs.streamlit.io/deploy/streamlit-community-cloud/deploy-your-app/deploy) and the [nfelo README](https://github.com/greerreNFL/nfelo).

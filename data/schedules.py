@@ -150,12 +150,12 @@ def format_kickoff_pt(gameday: object, gametime: object) -> str:
 
 def load_schedules(season: int) -> pl.DataFrame:
     """Load nflverse schedules for ``season`` with derived venue and ML win percentages."""
-    try:
-        df = load_csv(GAMES_URL)
-    except RuntimeError:
-        return _empty_schedules()
-
-    if df.is_empty() or "season" not in df.columns:
+    df = load_csv(GAMES_URL)
+    required = {"season", "week", "game_type", "game_id", "gameday", "gametime", "home_team", "away_team"}
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise ValueError(f"Schedule source missing required columns: {', '.join(missing)}")
+    if df.is_empty():
         return _empty_schedules()
 
     df = df.filter(pl.col("season") == season)

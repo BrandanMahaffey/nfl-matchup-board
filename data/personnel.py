@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from datetime import date, datetime, timezone
+
 import polars as pl
 
-from data.io import load_csv
-
+from data.io import DataLoadError, load_csv
+from data.teamref import canonical
 
 RELEASE = "https://github.com/nflverse/nflverse-data/releases/download"
 
@@ -20,8 +22,16 @@ _KEY_POS_GROUPS: dict[str, set[str]] = {
 _STATUS_ORDER = {
     "out": 0,
     "doubtful": 1,
-    "questionable": 2,
+    "dnp": 2,
+    "limited": 3,
+    "questionable": 4,
+    "ir": 5,
+    "pup": 6,
+    "nfi": 7,
+    "suspended": 8,
 }
+
+_OFFICIAL_STATUSES = {"out", "doubtful", "questionable", "ir", "pup", "nfi", "suspended"}
 
 
 def _empty_injuries() -> pl.DataFrame:
@@ -68,17 +78,52 @@ def _empty_snaps() -> pl.DataFrame:
 
 
 def _normalize_status(status: str | None) -> str | None:
+    """Official game-status bucket from ``report_status``."""
     if status is None:
         return None
     s = status.strip()
     if not s:
         return None
     lower = s.lower()
-    if lower in _STATUS_ORDER:
+    if lower in _OFFICIAL_STATUSES:
         return lower
+    if "injured reserve" in lower or lower == "ir":
+        return "ir"
+    if "physically unable" in lower or "pup" in lower:
+        return "pup"
+    if "non-football" in lower or lower == "nfi":
+        return "nfi"
+    if "suspend" in lower:
+        return "suspended"
     for prefix in ("out", "doubtful", "questionable"):
         if lower.startswith(prefix):
             return prefix
+    return None
+
+
+def _practice_bucket(status: str | None) -> str | None:
+    if status is None:
+        return None
+    lower = status.strip().lower()
+    if not lower:
+        return None
+    if "did not participate" in lower or lower.startswith("dnp"):
+        return "dnp"
+    if "limited" in lower:
+        return "limited"
+    if "full particip" in lower:
+        return "full"
+    return None
+
+
+def _row_status(report_status: str | None, practice_status: str | None) -> str | None:
+    """Game status when posted; otherwise DNP / limited from the practice report."""
+    official = _normalize_status(report_status)
+    if official:
+        return official
+    practice = _practice_bucket(practice_status)
+    if practice in {"dnp", "limited"}:
+        return practice
     return None
 
 
@@ -88,21 +133,79 @@ def _is_key_position(position: str | None) -> bool:
     pos = position.strip().upper()
     return any(pos in group for group in _KEY_POS_GROUPS.values())
 
+def _team_set(teams: list[str]) -> set[str]:
+    return {canonical(team) for team in teams}
+
+
+def _canonicalize_team_column(df: pl.DataFrame) -> pl.DataFrame:
+    if "team" not in df.columns:
+        raise ValueError("personnel feed is missing required 'team' column")
+    return df.with_columns(
+        pl.col("team").map_elements(canonical, return_dtype=pl.String).alias("team")
+    )
+
+
+def _normalise_feed_dt(value: object) -> datetime:
+    if value is None:
+        raise ValueError("depth chart feed contains a null 'dt' value")
+    if isinstance(value, str):
+        text = value.strip()
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            value = datetime.fromisoformat(text)
+        except ValueError as exc:
+            raise ValueError(f"depth chart feed has invalid 'dt' value: {value!r}") from exc
+    if isinstance(value, date) and not isinstance(value, datetime):
+        value = datetime.combine(value, datetime.min.time())
+    if not isinstance(value, datetime):
+        raise ValueError(f"depth chart feed has unsupported 'dt' type: {type(value).__name__}")
+    if value.tzinfo is None or value.utcoffset() is None:
+        # Historical nflverse files have also arrived as timezone-naive UTC values.
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
+
+
+def _normalise_depth_dates(df: pl.DataFrame) -> pl.DataFrame:
+    dtype = df.schema.get("dt")
+    if dtype is None:
+        raise ValueError("depth chart feed is missing required 'dt' column")
+    if not (dtype == pl.String or dtype == pl.Date or isinstance(dtype, pl.Datetime)):
+        raise ValueError(f"depth chart feed has unsupported 'dt' schema: {dtype}")
+    values = [_normalise_feed_dt(value) for value in df.get_column("dt").to_list()]
+    return df.with_columns(pl.Series("_dt_utc", values, dtype=pl.Datetime(time_zone="UTC")))
+
+
 
 def key_injuries(season: int, week: int, teams: list[str]) -> pl.DataFrame:
     url = f"{RELEASE}/injuries/injuries_{season}.csv"
     try:
         df = load_csv(url)
-    except RuntimeError:
+    except DataLoadError:
         return _empty_injuries()
-    df = df.filter(pl.col("team").is_in(teams), pl.col("week") == week)
+    df = _canonicalize_team_column(df)
+    df = df.filter(pl.col("team").is_in(_team_set(teams)), pl.col("week") == week)
+    if df.is_empty():
+        return _empty_injuries()
 
+    official = pl.col("report_status").map_elements(_normalize_status, return_dtype=pl.String)
+    practice = (
+        pl.col("practice_status").map_elements(_practice_bucket, return_dtype=pl.String)
+        if "practice_status" in df.columns
+        else pl.lit(None, dtype=pl.String)
+    )
+    df = df.with_columns(official.alias("_official"), practice.alias("_practice"))
     df = df.with_columns(
-        pl.col("report_status")
-        .map_elements(_normalize_status, return_dtype=pl.String)
+        pl.when(pl.col("_official").is_not_null())
+        .then(pl.col("_official"))
+        .when(pl.col("_practice").is_in(["dnp", "limited"]))
+        .then(pl.col("_practice"))
+        .otherwise(None)
         .alias("_status_norm")
     )
     df = df.filter(pl.col("_status_norm").is_not_null())
+    if df.is_empty():
+        return _empty_injuries()
     df = df.with_columns(
         pl.col("position")
         .map_elements(_is_key_position, return_dtype=pl.Boolean)
@@ -112,19 +215,22 @@ def key_injuries(season: int, week: int, teams: list[str]) -> pl.DataFrame:
         .alias("_status_rank"),
     )
     return df.sort(["_status_rank", "is_key"], descending=[False, True]).drop(
-        "_status_norm", "_status_rank"
+        "_status_norm", "_status_rank", "_official", "_practice"
     )
 
 
 def last_week_snaps(season: int, week: int, teams: list[str]) -> pl.DataFrame:
-    snap_week = week - 1 if week > 1 else 1
+    if week <= 1:
+        return _empty_snaps()
+    snap_week = week - 1
 
     url = f"{RELEASE}/snap_counts/snap_counts_{season}.csv"
     try:
         df = load_csv(url)
-    except RuntimeError:
+    except DataLoadError:
         return _empty_snaps()
-    df = df.filter(pl.col("team").is_in(teams), pl.col("week") == snap_week)
+    df = _canonicalize_team_column(df)
+    df = df.filter(pl.col("team").is_in(_team_set(teams)), pl.col("week") == snap_week)
     if df.is_empty():
         return _empty_snaps()
 
@@ -161,29 +267,76 @@ def _last_name(value: object) -> str:
     return name.split()[-1]
 
 
-def depth_starters(season: int, teams: list[str]) -> pl.DataFrame:
-    """Every listed rank-1 depth-chart player for ``teams`` (latest chart)."""
+def depth_starters(
+    season: int,
+    teams: list[str],
+    *,
+    week: int,
+    as_of: datetime,
+) -> pl.DataFrame:
+    """Rank-1 depth-chart players from each team's latest chart before a game."""
+    if as_of.tzinfo is None or as_of.utcoffset() is None:
+        raise ValueError("depth_starters requires a timezone-aware as_of datetime")
+    cutoff = as_of.astimezone(timezone.utc)
     url = f"{RELEASE}/depth_charts/depth_charts_{season}.csv"
     try:
         df = load_csv(url)
     except RuntimeError:
         return _empty_starters()
-    if df.is_empty() or "dt" not in df.columns:
+    if df.is_empty():
         return _empty_starters()
-    latest_dt = df.select(pl.col("dt").max()).item()
-    df = df.filter(pl.col("dt") == latest_dt, pl.col("team").is_in(teams), pl.col("pos_rank") == 1)
+
+    legacy_columns = {"season", "club_code", "week", "game_type", "depth_team",
+                      "gsis_id", "position", "depth_position", "full_name"}
+    if legacy_columns.issubset(df.columns):
+        df = df.filter(
+            (pl.col("season") == season)
+            & (pl.col("game_type") == "REG")
+            & (pl.col("week") <= week)
+        )
+        df = df.with_columns(
+            pl.col("club_code").map_elements(canonical, return_dtype=pl.String).alias("team")
+        ).filter(pl.col("team").is_in(_team_set(teams)))
+        if df.is_empty():
+            return _empty_starters()
+        latest = df.group_by("team").agg(pl.col("week").max().alias("_latest_week"))
+        df = df.join(latest, on="team", how="inner").filter(
+            (pl.col("week") == pl.col("_latest_week"))
+            & (pl.col("depth_team").cast(pl.String) == "1")
+        )
+        if df.is_empty():
+            return _empty_starters()
+        return (
+            df.select(
+                "team",
+                pl.lit("starter").alias("unit"),
+                pl.col("depth_position").alias("pos_abb"),
+                pl.col("full_name").alias("player_name"),
+                "gsis_id",
+                pl.col("position").alias("pos_grp"),
+            )
+            .sort(["team", "pos_abb", "pos_grp"])
+            .unique(subset=["team", "gsis_id"], keep="first")
+            .select("team", "unit", "pos_abb", "player_name", "gsis_id")
+        )
+
+    df = _canonicalize_team_column(df)
+    df = _normalise_depth_dates(df)
+    df = df.filter(
+        pl.col("team").is_in(_team_set(teams)),
+        pl.col("_dt_utc") <= cutoff,
+    )
+    if df.is_empty():
+        return _empty_starters()
+    latest = df.group_by("team").agg(pl.col("_dt_utc").max().alias("_latest_dt"))
+    df = df.join(latest, on="team", how="inner").filter(pl.col("_dt_utc") == pl.col("_latest_dt"))
+    df = df.filter(pl.col("pos_rank") == 1)
     if df.is_empty():
         return _empty_starters()
     return (
         df.sort(["team", "pos_abb", "pos_grp"])
         .unique(subset=["team", "gsis_id"], keep="first")
-        .select(
-            "team",
-            pl.lit("starter").alias("unit"),
-            "pos_abb",
-            "player_name",
-            "gsis_id",
-        )
+        .select("team", pl.lit("starter").alias("unit"), "pos_abb", "player_name", "gsis_id")
     )
 
 
@@ -193,29 +346,31 @@ def injury_records(
     snaps: pl.DataFrame,
     team: str,
 ) -> list[dict]:
-    """Structured injury rows; ``is_starter`` uses depth chart or 50%+ snaps."""
+    team = canonical(team)
     if injuries is None or injuries.is_empty() or "team" not in injuries.columns:
         return []
+    injuries = _canonicalize_team_column(injuries)
     sub = injuries.filter(pl.col("team") == team)
     if sub.is_empty():
         return []
-
     starter_ids: set[str] = set()
     starter_names: set[str] = set()
     if starters is not None and not starters.is_empty() and "team" in starters.columns:
+        starters = _canonicalize_team_column(starters)
         s = starters.filter(pl.col("team") == team)
         if "gsis_id" in s.columns:
             starter_ids = {str(x) for x in s.get_column("gsis_id").drop_nulls().to_list()}
         if "player_name" in s.columns:
             starter_names = {_norm_name(x) for x in s.get_column("player_name").drop_nulls().to_list()}
     if snaps is not None and not snaps.is_empty() and "team" in snaps.columns:
+        snaps = _canonicalize_team_column(snaps)
         sn = snaps.filter(pl.col("team") == team)
         if not sn.is_empty() and "player" in sn.columns:
             starter_names |= {_norm_name(x) for x in sn.get_column("player").drop_nulls().to_list()}
 
     rows: list[dict] = []
     for row in sub.iter_rows(named=True):
-        status = _normalize_status(row.get("report_status"))
+        status = _row_status(row.get("report_status"), row.get("practice_status"))
         if status is None:
             continue
         name = (row.get("full_name") or "").strip()
@@ -223,25 +378,25 @@ def injury_records(
             continue
         gid = str(row.get("gsis_id") or "")
         is_starter = (gid and gid in starter_ids) or _norm_name(name) in starter_names
+        injury = (row.get("report_primary_injury") or row.get("practice_primary_injury") or "").strip()
         rows.append(
             {
                 "team": team,
                 "player": name,
                 "position": (row.get("position") or "").strip().upper(),
                 "status": status,
-                "injury": (row.get("report_primary_injury") or "").strip(),
+                "injury": injury,
                 "practice": (row.get("practice_status") or "").strip(),
                 "is_starter": is_starter,
                 "is_key": bool(row.get("is_key")),
             }
         )
-    rank = {"out": 0, "doubtful": 1, "questionable": 2}
-    rows.sort(key=lambda r: (0 if r["is_starter"] else 1, rank.get(r["status"], 9), r["player"]))
+    rows.sort(key=lambda r: (0 if r["is_starter"] else 1, _STATUS_ORDER.get(r["status"], 9), r["player"]))
     return rows
 
 
 def injury_status_counts(records: list[dict]) -> dict[str, int]:
-    out = doubtful = questionable = 0
+    out = doubtful = questionable = dnp = limited = 0
     for row in records or []:
         status = row.get("status")
         if status == "out":
@@ -250,7 +405,17 @@ def injury_status_counts(records: list[dict]) -> dict[str, int]:
             doubtful += 1
         elif status == "questionable":
             questionable += 1
-    return {"out": out, "doubtful": doubtful, "questionable": questionable}
+        elif status == "dnp":
+            dnp += 1
+        elif status == "limited":
+            limited += 1
+    return {
+        "out": out,
+        "doubtful": doubtful,
+        "questionable": questionable,
+        "dnp": dnp,
+        "limited": limited,
+    }
 
 
 def starter_out_line(records: list[dict]) -> str:

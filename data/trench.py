@@ -93,25 +93,29 @@ def team_pressure(season: int) -> pl.DataFrame:
         pl.col("times_hit").fill_null(0),
     )
 
-    qb_week = (
+    # Pressure rate is retained from the most-pressured QB, while pressure
+    # and sack counts represent every QB on the team for that week.
+    qb_counts = pass_df.group_by(["week", "team"]).agg(
+        pl.col("times_pressured").sum().alias("pressures_allowed"),
+        pl.col("times_sacked").sum().alias("sacks_allowed"),
+    )
+    qb_rate = (
         pass_df.sort(["team", "week", "times_pressured"], descending=[False, False, True])
         .unique(subset=["team", "week"], keep="first")
-        .select(
-            "week",
-            "team",
-            pl.col("times_pressured").alias("pressures_allowed"),
-            pl.col("times_pressured_pct").alias("pressure_pct_allowed"),
-            pl.col("times_sacked").alias("sacks_allowed"),
-        )
+        .select("week", "team", pl.col("times_pressured_pct").alias("pressure_pct_allowed"))
+    )
+    qb_week = qb_counts.join(qb_rate, on=["week", "team"], how="left").select(
+        "week", "team", "pressures_allowed", "pressure_pct_allowed", "sacks_allowed"
     )
 
     if def_df.is_empty():
         return qb_week.with_columns(
-            pl.lit(0.0).alias("pressures_generated"),
-            pl.lit(0.0).alias("sacks_generated"),
-            pl.lit(0.0).alias("hurries_generated"),
-            pl.lit("").alias("top_rushers"),
+            pl.lit(None).cast(pl.Float64).alias("pressures_generated"),
+            pl.lit(None).cast(pl.Float64).alias("sacks_generated"),
+            pl.lit(None).cast(pl.Float64).alias("hurries_generated"),
+            pl.lit(None).cast(pl.String).alias("top_rushers"),
         ).select(_PRESSURE_COLS)
+
 
     def_df = def_df.with_columns(pl.col("def_pressures").fill_null(0))
 
@@ -126,7 +130,6 @@ def team_pressure(season: int) -> pl.DataFrame:
     return (
         qb_week.join(def_agg, on=["week", "team"], how="left")
         .join(top_rushers, on=["week", "team"], how="left")
-        .with_columns(pl.col("top_rushers").fill_null(""))
         .select(_PRESSURE_COLS)
     )
 

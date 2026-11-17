@@ -1,11 +1,12 @@
 """Join nflverse / nfelo / weather into per-game matchup cards."""
 
-from __future__ import annotations
-
+from datetime import date, datetime, time, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import polars as pl
 
+from data.io import DataLoadError
 from data.nfelo import load_elo_snapshot, load_nfelo_games
 from data.personnel import (
     depth_starters,
@@ -19,9 +20,11 @@ from data.schedules import format_kickoff_pt, load_schedules
 from data.team_form import (
     annotate_defense_and_scoring,
     load_team_week_stats,
+    opponent_adjusted_epa,
     recent_form,
     season_totals,
 )
+from data.special_teams import team_st_unit_rows
 from data.trench import team_ngs, team_pressure
 from data.weather import weather_for_games
 
@@ -31,8 +34,36 @@ NFELO_TEAM = {"OAK": "LV", "SD": "LAC", "STL": "LA"}
 def _safe(fn, default):
     try:
         return fn()
-    except Exception:
+    except DataLoadError:
         return default
+
+
+_EASTERN = ZoneInfo("America/New_York")
+
+
+def _kickoff_utc(game: dict[str, Any]) -> datetime:
+    raw_day = game.get("gameday")
+    if isinstance(raw_day, datetime):
+        day = raw_day.date()
+    elif isinstance(raw_day, date):
+        day = raw_day
+    else:
+        day = date.fromisoformat(str(raw_day)[:10])
+    raw_time = game.get("gametime")
+    if isinstance(raw_time, datetime):
+        local = raw_time
+        if local.tzinfo is None:
+            local = local.replace(tzinfo=_EASTERN)
+        return local.astimezone(timezone.utc)
+    if isinstance(raw_time, time):
+        kickoff = raw_time
+    else:
+        text = str(raw_time or "13:00").strip()
+        try:
+            kickoff = datetime.strptime(text, "%I:%M %p").time()
+        except ValueError:
+            kickoff = time.fromisoformat(text[:8])
+    return datetime.combine(day, kickoff, tzinfo=_EASTERN).astimezone(timezone.utc)
 
 
 def _row(df: pl.DataFrame | None, team: str, col: str = "team") -> dict[str, Any]:
@@ -364,13 +395,12 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
     through = week - 1 if week > 1 else 0
 
     season_df, recent_df = _prep_form(season, week)
-    elo = _safe(load_elo_snapshot, pl.DataFrame())
+    elo = _safe(lambda: load_elo_snapshot(season, week), pl.DataFrame())
     if not elo.is_empty() and "team" in elo.columns:
         elo = elo.with_columns(pl.col("team").replace(NFELO_TEAM, default=pl.col("team")))
     nfelo_games = _safe(lambda: load_nfelo_games(season), pl.DataFrame())
     weather = _safe(lambda: weather_for_games(week_games), pl.DataFrame())
     inj = _safe(lambda: key_injuries(season, week, teams), pl.DataFrame())
-    all_starters = _safe(lambda: depth_starters(season, teams), pl.DataFrame())
     snaps = _safe(lambda: last_week_snaps(season, week, teams), pl.DataFrame())
     press = _safe(lambda: team_pressure(season), pl.DataFrame())
     ngs = _safe(lambda: team_ngs(season), pl.DataFrame())
@@ -398,6 +428,11 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
     for g in week_games.sort(["gameday", "gametime"]).to_dicts():
         home = g.get("home_team")
         away = g.get("away_team")
+        cutoff = min(_kickoff_utc(g), datetime.now(timezone.utc))
+        starters = _safe(
+            lambda: depth_starters(season, teams, as_of=cutoff, week=week),
+            pl.DataFrame(),
+        )
         h_form = _row(season_df, home)
         a_form = _row(season_df, away)
         h_rec = _row(recent_df, home)
@@ -418,8 +453,8 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
         flags = _standout_flags(units)
         standouts = [_standout_sentence(k, v, home, away) for k, v in flags[:4]]
         venue = g.get("venue") or ("outdoor" if g.get("roof") in {"outdoors", "open"} else "indoor")
-        inj_home_rows = injury_records(inj, all_starters, snaps, home)
-        inj_away_rows = injury_records(inj, all_starters, snaps, away)
+        inj_home_rows = injury_records(inj, starters, snaps, home)
+        inj_away_rows = injury_records(inj, starters, snaps, away)
         cards.append(
             {
                 "game_id": g.get("game_id"),
@@ -470,7 +505,7 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
 def league_team_rows(season: int, week: int) -> list[dict[str, Any]]:
     """Season-to-date team form through the week before ``week``."""
     season_df, _recent = _prep_form(season, week)
-    elo = _safe(load_elo_snapshot, pl.DataFrame())
+    elo = _safe(lambda: load_elo_snapshot(season, week), pl.DataFrame())
     if season_df is None or season_df.is_empty():
         return []
     rows = []
@@ -492,4 +527,79 @@ def league_team_rows(season: int, week: int) -> list[dict[str, Any]]:
             }
         )
     rows.sort(key=lambda x: (-(x["nfelo"] or -1e9)))
+    return rows
+
+
+def league_adj_epa_rows(season: int, week: int) -> list[dict[str, Any]]:
+    """Opponent-adjusted EPA/g through the week before ``week``."""
+    schedules = load_schedules(season)
+    stats = _safe(lambda: load_team_week_stats(season), pl.DataFrame())
+    if stats is None or stats.is_empty():
+        return []
+    games = _safe(lambda: annotate_defense_and_scoring(stats, schedules), pl.DataFrame())
+    through = week - 1 if week > 1 else 0
+    adj = _safe(lambda: opponent_adjusted_epa(games, through_week=through), pl.DataFrame())
+    if adj is None or adj.is_empty():
+        return []
+    rows = adj.to_dicts()
+    rows.sort(
+        key=lambda r: (
+            -(r.get("adj_net_epa_pg") if r.get("adj_net_epa_pg") is not None else -1e9)
+        )
+    )
+    return rows
+
+
+def league_st_rows(season: int, week: int) -> list[dict[str, Any]]:
+    """Special-teams season totals through the week before ``week``."""
+    season_df, _recent = _prep_form(season, week)
+    if season_df is None or season_df.is_empty():
+        return []
+    through = week - 1 if week > 1 else 0
+    pbp = {r.get("team"): r for r in _safe(lambda: team_st_unit_rows(season, through), [])}
+    rows = []
+    for r in season_df.to_dicts():
+        team = r.get("team")
+        extra = pbp.get(team) or {}
+        fg_made = _num(r, "fg_made")
+        fg_att = _num(r, "fg_att")
+        rows.append(
+            {
+                "team": team,
+                "fg_pct": _num(r, "fg_pct"),
+                "fg_made": fg_made,
+                "fg_att": fg_att,
+                "pat_pct": _num(r, "pat_pct"),
+                "punt_net_avg": _num(r, "punt_net_avg"),
+                "inside_20_pct": _num(r, "inside_20_pct"),
+                "punt_return_yards": _num(extra, "pr_yards", _num(r, "punt_return_yards")),
+                "kickoff_return_yards": _num(extra, "kr_yards", _num(r, "kickoff_return_yards")),
+                "kr_allowed": _num(extra, "kr_allowed"),
+                "pr_allowed": _num(extra, "pr_allowed"),
+                "ko_yards_pg": _num(extra, "ko_yards_pg"),
+                "punt_yards_pg": _num(extra, "punt_yards_pg"),
+                "ko_yards_pk": _num(extra, "ko_yards_pk"),
+                "punt_yards_pp": _num(extra, "punt_yards_pp"),
+                "kr_avg": _num(extra, "kr_avg"),
+                "kr_allowed_avg": _num(extra, "kr_allowed_avg"),
+                "pr_avg": _num(extra, "pr_avg"),
+                "pr_allowed_avg": _num(extra, "pr_allowed_avg"),
+                "st_epa_pg": _num(extra, "st_epa_pg"),
+                "ko_epa": _num(extra, "ko_epa"),
+                "punt_epa": _num(extra, "punt_epa"),
+                "fg_epa": _num(extra, "fg_epa"),
+                "st_to_given": _num(extra, "st_to_given"),
+                "st_to_taken": _num(extra, "st_to_taken"),
+                "st_to_diff": _num(extra, "st_to_diff"),
+                "special_teams_tds": _num(r, "special_teams_tds"),
+                "games": _num(r, "games"),
+            }
+        )
+    rows.sort(
+        key=lambda x: (
+            -(x["st_epa_pg"] if x["st_epa_pg"] is not None else -1e9),
+            -(x["special_teams_tds"] if x["special_teams_tds"] is not None else -1e9),
+            -(x["fg_pct"] if x["fg_pct"] is not None else -1e9),
+        )
+    )
     return rows

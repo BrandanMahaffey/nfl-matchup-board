@@ -30,8 +30,13 @@ _GAME_OUTPUT_COLS = [
     "def_sacks",
     "special_teams_tds",
     "fg_pct",
+    "fg_made",
+    "fg_att",
+    "pat_made",
+    "pat_att",
     "pt_net_yards",
     "pt_att",
+    "pt_inside_20",
     "punt_return_yards",
     "kickoff_return_yards",
     "passing_cpoe",
@@ -62,8 +67,18 @@ _SEASON_TOTAL_COLS = [
     "sacks_suffered",
     "def_sacks",
     "special_teams_tds",
+    "fg_made",
+    "fg_att",
     "fg_pct",
+    "pat_made",
+    "pat_att",
+    "pat_pct",
     "punt_net_avg",
+    "pt_inside_20",
+    "pt_att",
+    "inside_20_pct",
+    "punt_return_yards",
+    "kickoff_return_yards",
     "passing_cpoe",
 ]
 
@@ -102,8 +117,13 @@ def annotate_defense_and_scoring(
         "def_sacks",
         "special_teams_tds",
         "fg_pct",
+        "fg_made",
+        "fg_att",
+        "pat_made",
+        "pat_att",
         "pt_net_yards",
         "pt_att",
+        "pt_inside_20",
         "punt_return_yards",
         "kickoff_return_yards",
         "passing_cpoe",
@@ -189,9 +209,15 @@ def _aggregate_team_stats(rows: pl.DataFrame) -> pl.DataFrame:
         pl.col("sacks_suffered").sum(),
         pl.col("def_sacks").sum(),
         pl.col("special_teams_tds").sum(),
-        pl.col("fg_pct").mean().alias("fg_pct"),
+        pl.col("fg_made").sum(),
+        pl.col("fg_att").sum(),
+        pl.col("pat_made").sum(),
+        pl.col("pat_att").sum(),
         pl.col("pt_net_yards").sum().alias("pt_net_yards"),
         pl.col("pt_att").sum().alias("pt_att"),
+        pl.col("pt_inside_20").sum(),
+        pl.col("punt_return_yards").sum(),
+        pl.col("kickoff_return_yards").sum(),
         pl.col("passing_cpoe").mean().alias("passing_cpoe"),
     )
 
@@ -209,6 +235,18 @@ def _aggregate_team_stats(rows: pl.DataFrame) -> pl.DataFrame:
         .then(pl.col("pt_net_yards") / pl.col("pt_att"))
         .otherwise(None)
         .alias("punt_net_avg"),
+        pl.when(pl.col("fg_att") > 0)
+        .then(pl.col("fg_made") / pl.col("fg_att"))
+        .otherwise(None)
+        .alias("fg_pct"),
+        pl.when(pl.col("pat_att") > 0)
+        .then(pl.col("pat_made") / pl.col("pat_att"))
+        .otherwise(None)
+        .alias("pat_pct"),
+        pl.when(pl.col("pt_att") > 0)
+        .then(pl.col("pt_inside_20") / pl.col("pt_att"))
+        .otherwise(None)
+        .alias("inside_20_pct"),
     ).select(_SEASON_TOTAL_COLS)
 
 
@@ -250,4 +288,129 @@ def recent_form(
         pl.col("def_epa_pg").alias("rec_def_epa_pg"),
         pl.col("points_for_pg").alias("rec_points_for_pg"),
         pl.col("to_diff").alias("rec_to_diff"),
+    )
+
+
+_ADJ_COLS = [
+    "team",
+    "games",
+    "adj_off_epa_pg",
+    "adj_def_epa_pg",
+    "adj_net_epa_pg",
+    "adj_pass_epa_pg",
+    "adj_rush_epa_pg",
+    "adj_pass_epa_allowed_pg",
+    "adj_rush_epa_allowed_pg",
+    "off_epa_pg",
+    "def_epa_pg",
+    "sos_off",
+    "sos_def",
+]
+
+
+# Games of opponent evidence before the observed unit is trusted as much as
+# league average. k=4 is the usual public-analytics prior (rbsdm-style).
+_ADJ_SHRINK_K = 4.0
+
+
+def opponent_adjusted_epa(
+    game_rows: pl.DataFrame, through_week: int | None = None
+) -> pl.DataFrame:
+    """Public-analytics Adjusted EPA from nflverse team-week EPA.
+
+    For each game:
+
+        Adj Off = Off EPA - (Opp Def - League Off)
+        Adj Def = Def EPA allowed - (Opp Off - League Off)
+
+    Opponent means are leave-one-out (the game being scored is dropped) and
+    shrunk toward league average: weight = n / (n + 4). That is schedule-
+    adjusted EPA, not PFF Adjusted EPA or Football Outsiders DVOA.
+    """
+    empty = pl.DataFrame({c: [] for c in _ADJ_COLS})
+    if game_rows is None or game_rows.is_empty():
+        return empty
+    rows = game_rows.filter(pl.col("points_for").is_not_null())
+    if through_week is not None:
+        rows = rows.filter(pl.col("week") <= through_week)
+    needed = [
+        "team",
+        "opponent_team",
+        "off_epa",
+        "def_epa_allowed",
+        "pass_epa",
+        "rush_epa",
+        "pass_epa_allowed",
+        "rush_epa_allowed",
+    ]
+    if rows.is_empty() or any(col not in rows.columns for col in needed):
+        return empty
+
+    def _mean(col: str) -> float:
+        series = rows.get_column(col).drop_nulls()
+        if series.len() == 0:
+            return 0.0
+        return float(series.mean())
+
+    league_off = _mean("off_epa")
+    league_pass = _mean("pass_epa")
+    league_rush = _mean("rush_epa")
+
+    opp = rows.group_by("team").agg(
+        pl.len().alias("_n"),
+        pl.col("off_epa").sum().alias("_sum_off"),
+        pl.col("def_epa_allowed").sum().alias("_sum_def"),
+        pl.col("pass_epa").sum().alias("_sum_pass"),
+        pl.col("rush_epa").sum().alias("_sum_rush"),
+        pl.col("pass_epa_allowed").sum().alias("_sum_pass_d"),
+        pl.col("rush_epa_allowed").sum().alias("_sum_rush_d"),
+    ).rename({"team": "opponent_team"})
+
+    work = rows.join(opp, on="opponent_team", how="left")
+
+    def _loo(sum_col: str, this_col: str, league: float) -> pl.Expr:
+        observed = (
+            pl.when(pl.col("_n") > 1)
+            .then((pl.col(sum_col) - pl.col(this_col).fill_null(0)) / (pl.col("_n") - 1))
+            .otherwise(pl.lit(league))
+        )
+        n_loo = pl.when(pl.col("_n") > 1).then(pl.col("_n") - 1).otherwise(0)
+        weight = n_loo.cast(pl.Float64) / (n_loo.cast(pl.Float64) + _ADJ_SHRINK_K)
+        return weight * observed + (1.0 - weight) * league
+
+    work = work.with_columns(
+        _loo("_sum_def", "off_epa", league_off).alias("opp_def"),
+        _loo("_sum_off", "def_epa_allowed", league_off).alias("opp_off"),
+        _loo("_sum_pass_d", "pass_epa", league_pass).alias("opp_pass_d"),
+        _loo("_sum_rush_d", "rush_epa", league_rush).alias("opp_rush_d"),
+        _loo("_sum_pass", "pass_epa_allowed", league_pass).alias("opp_pass"),
+        _loo("_sum_rush", "rush_epa_allowed", league_rush).alias("opp_rush"),
+    ).with_columns(
+        (pl.col("off_epa") - (pl.col("opp_def") - league_off)).alias("adj_off"),
+        (pl.col("def_epa_allowed") - (pl.col("opp_off") - league_off)).alias("adj_def"),
+        (pl.col("pass_epa") - (pl.col("opp_pass_d") - league_pass)).alias("adj_pass"),
+        (pl.col("rush_epa") - (pl.col("opp_rush_d") - league_rush)).alias("adj_rush"),
+        (pl.col("pass_epa_allowed") - (pl.col("opp_pass") - league_pass)).alias("adj_pass_d"),
+        (pl.col("rush_epa_allowed") - (pl.col("opp_rush") - league_rush)).alias("adj_rush_d"),
+    )
+
+    return (
+        work.group_by("team")
+        .agg(
+            pl.len().alias("games"),
+            pl.col("adj_off").mean().alias("adj_off_epa_pg"),
+            pl.col("adj_def").mean().alias("adj_def_epa_pg"),
+            pl.col("adj_pass").mean().alias("adj_pass_epa_pg"),
+            pl.col("adj_rush").mean().alias("adj_rush_epa_pg"),
+            pl.col("adj_pass_d").mean().alias("adj_pass_epa_allowed_pg"),
+            pl.col("adj_rush_d").mean().alias("adj_rush_epa_allowed_pg"),
+            pl.col("off_epa").mean().alias("off_epa_pg"),
+            pl.col("def_epa_allowed").mean().alias("def_epa_pg"),
+            pl.col("opp_def").mean().alias("sos_off"),
+            pl.col("opp_off").mean().alias("sos_def"),
+        )
+        .with_columns(
+            (pl.col("adj_off_epa_pg") - pl.col("adj_def_epa_pg")).alias("adj_net_epa_pg")
+        )
+        .select(_ADJ_COLS)
     )

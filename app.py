@@ -9,10 +9,20 @@ from typing import NamedTuple
 
 import streamlit as st
 
-from data.matchups import available_weeks, build_week_board, current_week, format_spread, league_team_rows
+from data.matchups import (
+    available_weeks,
+    build_week_board,
+    current_week,
+    format_spread,
+    league_adj_epa_rows,
+    league_st_rows,
+    league_team_rows,
+)
+from data.wide_stats import league_nflverse_rows, league_ngs_rows
+from data.theme import THEME_IDS, apply as apply_theme, from_query as theme_from_query
 from data.personnel import injury_status_counts
 from data.schedules import format_kickoff_pt
-from data.teamref import division, logo_url, pair_colors, team_name
+from data.teamref import display_color, division, logo_url, pair_colors, team_name
 
 _ICON = Path(__file__).with_name("assets") / "nfl-board.png"
 st.set_page_config(
@@ -20,7 +30,7 @@ st.set_page_config(
     page_icon=str(_ICON) if _ICON.exists() else "🏈",
     layout="wide",
     initial_sidebar_state="collapsed",
-    menu_items={"About": "NFL Matchup Board — weekly pool comparison. Built with Streamlit."},
+    menu_items={"About": "NFL Matchup Board - weekly pool comparison. Built with Streamlit."},
 )
 
 st.markdown(
@@ -30,74 +40,75 @@ st.markdown(
       .block-container { padding-top: 1.4rem; padding-bottom: 3rem; max-width: 1500px; }
 
       .masthead { display: flex; align-items: baseline; gap: 0.6rem; }
-      .masthead .rule { width: 4px; height: 1.55rem; background: #d8a94b; border-radius: 2px; }
       .masthead h1 {
         font-size: 1.5rem; font-weight: 750; letter-spacing: -0.01em;
         margin: 0; padding: 0; line-height: 1.1;
+        color: var(--board-text, #e6edf3);
       }
-      .masthead .sub { color: #8b98a5; font-size: 0.82rem; margin: 0.15rem 0 0 0.95rem; }
+      .masthead .sub { color: var(--board-muted, #8b98a5); font-size: 0.82rem; margin: 0.15rem 0 0 0.95rem; }
+      .masthead .sub a {
+        color: var(--board-muted, #8b98a5); text-decoration: none;
+        border-bottom: 1px dotted var(--board-dot, #39444f);
+      }
+      .masthead .sub a:hover { color: var(--board-text, #e6edf3); border-bottom-color: var(--board-accent, #d8a94b); }
 
       .chips { display: flex; flex-wrap: wrap; gap: 0.45rem; margin: 0.15rem 0 0.9rem; }
       .chip {
         display: inline-flex; align-items: baseline; gap: 0.4rem;
         padding: 0.3rem 0.7rem; border-radius: 999px;
-        background: #141b23; border: 1px solid #242e3a; font-size: 0.82rem;
+        background: var(--board-chip, #141b23); border: 1px solid var(--board-border, #242e3a); font-size: 0.82rem;
       }
-      .chip b { color: #e6edf3; font-weight: 650; }
-      .chip span { color: #8b98a5; }
+      .chip b { color: var(--board-text, #e6edf3); font-weight: 650; }
+      .chip span { color: var(--board-muted, #8b98a5); }
 
       .panel {
-        border: 1px solid #242e3a; border-radius: 0.7rem;
-        background: #121820; padding: 0.85rem 1rem; height: 100%;
+        border: 1px solid var(--board-border, #242e3a); border-radius: 0.7rem;
+        background: var(--board-panel, #121820); padding: 0.85rem 1rem; height: 100%;
       }
       .panel-h {
         font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.09em;
-        color: #8b98a5; font-weight: 700; margin-bottom: 0.7rem;
+        color: var(--board-muted, #8b98a5); font-weight: 700; margin-bottom: 0.7rem;
       }
       .panel ul { margin: 0; padding-left: 1.05rem; }
       .panel li { margin-bottom: 0.3rem; font-size: 0.9rem; line-height: 1.45; }
       .panel li:last-child { margin-bottom: 0; }
-      .panel .foot { color: #8b98a5; font-size: 0.78rem; margin-top: 0.7rem; line-height: 1.4; }
+      .panel .foot { color: var(--board-muted, #8b98a5); font-size: 0.78rem; margin-top: 0.7rem; line-height: 1.4; }
 
       .hero {
         display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 1rem;
-        border: 1px solid #242e3a; border-radius: 0.8rem; background: #121820;
+        border: 1px solid var(--board-border, #242e3a); border-radius: 0.8rem; background: var(--board-panel, #121820);
         padding: 0.9rem 1.2rem; margin-bottom: 0.9rem;
       }
       .hero-team { display: flex; align-items: center; gap: 0.75rem; min-width: 0; }
       .hero-team.home { flex-direction: row-reverse; text-align: right; }
       .hero-team img { width: 46px; height: 46px; object-fit: contain; }
       .hero-abbr { font-size: 1.35rem; font-weight: 750; line-height: 1.1; }
-      .hero-name { color: #8b98a5; font-size: 0.8rem; white-space: nowrap; }
+      .hero-name { color: var(--board-muted, #8b98a5); font-size: 0.8rem; white-space: nowrap; }
       .hero-mid { text-align: center; }
       .hero-score { font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-      .hero-at { font-size: 0.78rem; letter-spacing: 0.16em; color: #6f7d8c; text-transform: uppercase; }
-      .hero-meta { color: #8b98a5; font-size: 0.8rem; margin-top: 0.2rem; white-space: nowrap; }
+      .hero-at { font-size: 0.78rem; letter-spacing: 0.16em; color: var(--board-hero-at, #6f7d8c); text-transform: uppercase; }
+      .hero-meta { color: var(--board-muted, #8b98a5); font-size: 0.8rem; margin-top: 0.2rem; white-space: nowrap; }
 
       .cmp { display: flex; flex-direction: column; gap: 0.42rem; }
       .cmp-row {
         display: grid; grid-template-columns: 3.4rem 1fr 8.6rem 1fr 3.4rem;
         align-items: center; gap: 0.4rem;
       }
-      .cmp-num { font-size: 0.85rem; font-variant-numeric: tabular-nums; color: #93a2b1; }
+      .cmp-num { font-size: 0.85rem; font-variant-numeric: tabular-nums; color: var(--board-cmp-num, #93a2b1); }
       .cmp-num.l { text-align: right; }
       .cmp-num.r { text-align: left; }
-      .cmp-num.best { color: #e6edf3; font-weight: 700; }
-      .cmp-track { height: 0.4rem; border-radius: 999px; background: #1a222c; display: flex; }
+      .cmp-num.best { color: var(--board-text, #e6edf3); font-weight: 700; }
+      .cmp-track { height: 0.4rem; border-radius: 999px; background: var(--board-track, #1a222c); display: flex; }
       .cmp-track.l { justify-content: flex-end; }
       .cmp-fill { height: 100%; border-radius: 999px; }
       .cmp-label {
-        text-align: center; font-size: 0.77rem; color: #8b98a5;
-        cursor: help; border-bottom: 1px dotted #39444f; justify-self: center;
+        text-align: center; font-size: 0.77rem; color: var(--board-muted, #8b98a5);
+        cursor: help; border-bottom: 1px dotted var(--board-dot, #39444f); justify-self: center;
       }
 
       .form-line { font-size: 0.88rem; line-height: 1.6; }
       .form-line b { font-variant-numeric: tabular-nums; }
       .split { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-      .glossary { display: grid; grid-template-columns: repeat(auto-fit, minmax(310px, 1fr)); gap: 0.5rem 1.6rem; }
-      .glossary div { font-size: 0.86rem; line-height: 1.45; }
-      .glossary b { color: #d8a94b; }
-
       @media (max-width: 820px) {
         .hero { grid-template-columns: 1fr; gap: 0.5rem; }
         .hero-team.home { flex-direction: row; text-align: left; }
@@ -116,22 +127,22 @@ st.markdown(
 
 def _fmt(val, digits=1, signed=False, suffix=""):
     if val is None:
-        return "—"
+        return "-"
     try:
         num = float(val)
     except (TypeError, ValueError):
-        return "—"
+        return "-"
     body = f"{num:+.{digits}f}" if signed else f"{num:.{digits}f}"
     return body + suffix
 
 
 def _pct(val):
     if val is None:
-        return "—"
+        return "-"
     try:
         num = float(val)
     except (TypeError, ValueError):
-        return "—"
+        return "-"
     return f"{100.0 * num:.0f}%"
 
 
@@ -169,7 +180,7 @@ def _nan(val):
 
 
 @st.cache_data(ttl=3600, show_spinner="Loading nflverse, nfelo and weather data…")
-def _cards(season: int, week: int, _ver: int = 4):
+def _cards(season: int, week: int, _ver: int = 5):
     return build_week_board(season, week)
 
 
@@ -183,43 +194,29 @@ def _league_teams(season: int, week: int, _ver: int = 2):
     return league_team_rows(season, week)
 
 
-GLOSSARY = [
-    ("EPA", "Expected points added — how much a play moved the team's expected points. Offenses want it high, defenses want it low."),
-    ("EPA/g", "EPA totalled per game played, so teams with a bye still compare fairly."),
-    ("CPOE", "Completion percentage over expected — accuracy measured against the difficulty of the throws."),
-    ("RYOE", "Rush yards over expected — Next Gen Stats, season total above what the blocking and box counts predicted."),
-    ("Time to throw", "Average seconds from snap to release. Low is quick game, high means holding the ball."),
-    ("Pressure %", "Share of dropbacks where the offensive line let a rusher get home (PFF)."),
-    ("TO margin", "Turnover margin: takeaways minus giveaways."),
-    ("nfelo", "Public Elo-style power rating. About 1500 is league average, 1650 is a contender."),
-    ("Win%", "Home win probability from the nfelo model, or the betting moneyline when nfelo has no number."),
-    ("Spread / Total", "Market line. The favorite carries the negative number; the total is the combined over/under."),
-]
+@st.cache_data(ttl=3600, show_spinner="Adjusting EPA for schedule…")
+def _adj_epa(season: int, week: int, _ver: int = 7):
+    return league_adj_epa_rows(season, week)
 
 
-def _glossary_body() -> None:
-    items = "".join(
-        f"<div><b>{html.escape(term)}</b> — {html.escape(text)}</div>"
-        for term, text in GLOSSARY
-    )
-    st.markdown(f'<div class="glossary">{items}</div>', unsafe_allow_html=True)
-    st.caption(
-        "Sources: nflverse play-by-play, injuries and depth charts · PFF pressure data · "
-        "Next Gen Stats · nfelo ratings · Open-Meteo forecasts. Data is cached for an hour."
-    )
+@st.cache_data(ttl=3600, show_spinner="Loading special teams…")
+def _st_teams(season: int, week: int, _ver: int = 3):
+    return league_st_rows(season, week)
 
 
-def _render_glossary() -> None:
-    with st.expander("What the numbers mean"):
-        _glossary_body()
+@st.cache_data(ttl=3600, show_spinner="Loading nflverse team table…")
+def _nflverse_wide(season: int, week: int, _ver: int = 3):
+    return league_nflverse_rows(season, week)
 
 
-# --------------------------------------------------------------------------- shared bits
+@st.cache_data(ttl=3600, show_spinner="Loading Next Gen Stats…")
+def _ngs_wide(season: int, week: int, _ver: int = 1):
+    return league_ngs_rows(season, week)
 
 
 def _kickoff_label(c: dict) -> str:
     when = (c.get("kickoff_pt") or "").strip()
-    return when or format_kickoff_pt(c.get("gameday"), c.get("gametime")) or "—"
+    return when or format_kickoff_pt(c.get("gameday"), c.get("gametime")) or "-"
 
 
 def _conditions_text(c: dict) -> str:
@@ -247,18 +244,20 @@ def _status_counts(c: dict, side: str) -> tuple[int, int]:
 def _score_text(c: dict) -> str:
     if c.get("away_score") is None or c.get("home_score") is None:
         return ""
-    return f"{int(c['away_score'])}–{int(c['home_score'])}"
+    return f"{int(c['away_score'])}-{int(c['home_score'])}"
 
 
 # --------------------------------------------------------------------------- week board
 
 
-def _board_rows(cards: list[dict], show_score: bool) -> list[dict]:
+def _board_rows(cards: list[dict], show_score: bool, adj_net: dict[str, float] | None = None) -> list[dict]:
+    adj_net = adj_net or {}
     rows = []
+    base = ["Kickoff", "Matchup", "Spread", "Home win%", "Total", "Conditions", "Away Adj Net", "Home Adj Net"]
+    if show_score:
+        base = ["Kickoff", "Matchup", "Score", "Spread", "Home win%", "Total", "Conditions", "Away Adj Net", "Home Adj Net"]
     for c in cards:
         home, away = c["home_team"], c["away_team"]
-        out_a, q_a = _status_counts(c, "away")
-        out_h, q_h = _status_counts(c, "home")
         row = {
             "Kickoff": _kickoff_label(c),
             "Matchup": f"{away} @ {home}",
@@ -266,14 +265,12 @@ def _board_rows(cards: list[dict], show_score: bool) -> list[dict]:
             "Home win%": _pct_value(c.get("home_win_pct")),
             "Total": _num(c.get("total_line")),
             "Conditions": _conditions_text(c),
-            "Out": f"{out_a} / {out_h}",
-            "Quest.": f"{q_a} / {q_h}",
-            "Key edge": c.get("standout_short") or "—",
+            "Away Adj Net": _nan(adj_net.get(away)),
+            "Home Adj Net": _nan(adj_net.get(home)),
         }
         if show_score:
-            row = {**row, "Score": _score_text(c) or "—"}
-            row = {k: row[k] for k in ["Kickoff", "Matchup", "Score", "Spread", "Home win%", "Total", "Conditions", "Out", "Quest.", "Key edge"]}
-        rows.append(row)
+            row["Score"] = _score_text(c) or "-"
+        rows.append({k: row[k] for k in base})
     return rows
 
 
@@ -300,7 +297,7 @@ def _render_board(cards: list[dict], season: int, week: int) -> None:
     config = {
         "Kickoff": st.column_config.TextColumn("Kickoff", help="Kickoff in Pacific time", width=110),
         "Matchup": st.column_config.TextColumn("Matchup", help="Away team at home team", width=120),
-        "Score": st.column_config.TextColumn("Score", help="Final score, away–home", width=80),
+        "Score": st.column_config.TextColumn("Score", help="Final score, away-home", width=80),
         "Spread": st.column_config.TextColumn("Spread", help="Market spread. The favorite carries the negative number.", width=100),
         "Home win%": st.column_config.ProgressColumn(
             "Home win%",
@@ -312,9 +309,18 @@ def _render_board(cards: list[dict], season: int, week: int) -> None:
         ),
         "Total": st.column_config.NumberColumn("Total", help="Market over/under for combined points", format="%.1f", width=75),
         "Conditions": st.column_config.TextColumn("Conditions", help="Kickoff forecast for outdoor stadiums (Open-Meteo)", width=160),
-        "Out": st.column_config.TextColumn("Out", help="Players ruled out or doubtful — away / home", width=70),
-        "Quest.": st.column_config.TextColumn("Quest.", help="Players listed questionable — away / home", width=75),
-        "Key edge": st.column_config.TextColumn("Key edge", help="Largest statistical mismatch in the game", width="medium"),
+        "Away Adj Net": st.column_config.NumberColumn(
+            "Away Adj Net",
+            help="Opponent-adjusted net EPA/g for the away team (Adj Off minus Adj Def). Higher is better.",
+            format="%+.1f",
+            width=110,
+        ),
+        "Home Adj Net": st.column_config.NumberColumn(
+            "Home Adj Net",
+            help="Opponent-adjusted net EPA/g for the home team (Adj Off minus Adj Def). Higher is better.",
+            format="%+.1f",
+            width=110,
+        ),
     }
 
     st.caption(
@@ -322,8 +328,9 @@ def _render_board(cards: list[dict], season: int, week: int) -> None:
         "Click a column header to sort, and hover a header to see what the number means."
     )
     nonce = st.session_state.get("board_nonce", 0)
+    adj_net = {r["team"]: r.get("adj_net_epa_pg") for r in _adj_epa(season, week)}
     event = st.dataframe(
-        _board_rows(cards, show_score),
+        _board_rows(cards, show_score, adj_net),
         hide_index=True,
         width="stretch",
         height=_grid_height(len(cards)),
@@ -376,9 +383,9 @@ _GROUPS: list[tuple[str, list[Metric]]] = [
     (
         "Trenches",
         [
-            Metric("Pressures generated", "u_h_press_gen", "u_a_press_gen", 0, True, "Pass rush pressures the defensive front has produced (PFF)"),
-            Metric("Pressures allowed", "u_h_press_all", "u_a_press_all", 0, False, "Pressures the offensive line has given up (PFF)"),
-            Metric("Pressure % allowed", "u_press_pct_home", "u_press_pct_away", 1, False, "Share of dropbacks where the line allowed pressure (PFF)", "%"),
+            Metric("Pressures generated", "u_h_press_gen", "u_a_press_gen", 0, True, "Pass rush pressures the defensive front has produced (PFR)"),
+            Metric("Pressures allowed", "u_h_press_all", "u_a_press_all", 0, False, "Pressures the offensive line has given up (PFR)"),
+            Metric("Most-pressured QB rate", "u_press_pct_home", "u_press_pct_away", 1, False, "Rate for the team's most-pressured quarterback, averaged across weeks; this is not a team-total pressure rate (PFR)", "%"),
         ],
     ),
     (
@@ -455,6 +462,50 @@ def _cmp_panel(title: str, metrics: list[Metric], card: dict, colors: tuple[str,
     foot = f'<div class="foot">{html.escape(footer)}</div>' if footer else ""
     return f'<div class="panel"><div class="panel-h">{html.escape(title)}</div><div class="cmp">{rows}</div>{foot}</div>'
 
+def _render_glossary() -> None:
+    """Show the compact metric key used by both matchup-page branches."""
+    with st.expander("Metric glossary", expanded=False):
+        rows = [
+            "| Metric | Meaning | Units | Direction | Source |",
+            "| --- | --- | --- | --- | --- |",
+        ]
+        for group, metrics in _GROUPS:
+            for metric in metrics:
+                if metric.suffix:
+                    units = metric.suffix.strip()
+                elif "/g" in metric.label:
+                    units = "per game"
+                elif "rate" in metric.label.lower() or "%" in metric.label:
+                    units = "rate"
+                else:
+                    units = "value"
+                direction = (
+                    "Higher is better"
+                    if metric.higher_better is True
+                    else "Lower is better"
+                    if metric.higher_better is False
+                    else "Context only"
+                )
+                source = (
+                    "Next Gen Stats"
+                    if "Next Gen Stats" in metric.help
+                    else "PFR"
+                    if "PFR" in metric.help
+                    else "nflverse"
+                )
+                rows.append(
+                    f"| **{html.escape(metric.label)}** ({html.escape(group)}) | "
+                    f"{html.escape(metric.help)} | {html.escape(units)} | "
+                    f"{direction} | {source} |"
+                )
+        st.markdown(
+            "Sources, units, and comparison direction for every board metric. "
+            "Brighter bars indicate the better number when direction is defined.\n\n"
+            + "\n".join(rows)
+        )
+
+
+
 
 # --------------------------------------------------------------------------- game page
 
@@ -466,7 +517,7 @@ def _hero(c: dict) -> str:
         a_pts, h_pts = int(c["away_score"]), int(c["home_score"])
         a_style = "" if a_pts >= h_pts else "color:#8b98a5"
         h_style = "" if h_pts >= a_pts else "color:#8b98a5"
-        middle = f'<div class="hero-score"><span style="{a_style}">{a_pts}</span> – <span style="{h_style}">{h_pts}</span></div>'
+        middle = f'<div class="hero-score"><span style="{a_style}">{a_pts}</span> - <span style="{h_style}">{h_pts}</span></div>'
     else:
         middle = '<div class="hero-at">at</div>'
     meta = " · ".join(x for x in [_kickoff_label(c), c.get("stadium") or "", _conditions_text(c)] if x)
@@ -500,9 +551,9 @@ def _standouts_panel(c: dict) -> str:
             items.append(f"<li>{html.escape(text)}</li>")
     if not items:
         fallback = (
-            "No large statistical gaps — this one grades out close on paper."
+            "No large statistical gaps - this one grades out close on paper."
             if _has_unit_data(c)
-            else "Season stats begin after week 1, so there is nothing to compare yet."
+            else "No prior completed games, so there is nothing to compare yet."
         )
         items = [f"<li>{fallback}</li>"]
     return f'<div class="panel"><div class="panel-h">Why this game stands out</div><ul>{"".join(items)}</ul></div>'
@@ -511,14 +562,29 @@ def _standouts_panel(c: dict) -> str:
 def _injury_panel(c: dict, side: str) -> str:
     team = c[f"{side}_team"]
     out, quest = _status_counts(c, side)
+    counts = injury_status_counts(c.get(f"injuries_{side}_rows") or [])
+    practice_n = counts.get("dnp", 0) + counts.get("limited", 0)
     names = c.get(f"injuries_out_{side}") or ""
-    detail = f"Starters out: {names}" if names else "No listed starters out."
-    return (
-        f'<div class="panel"><div class="panel-h">{html.escape(team)} availability</div>'
-        f'<div class="chips" style="margin:0">'
+    dnp_starters = [
+        r["player"].split()[-1]
+        for r in (c.get(f"injuries_{side}_rows") or [])
+        if r.get("is_starter") and r.get("status") == "dnp"
+    ]
+    if names:
+        detail = f"Starters out: {names}"
+    elif dnp_starters:
+        detail = "Starters DNP in practice: " + " · ".join(dnp_starters)
+    else:
+        detail = "No listed starters out. Mid-week reports use practice status until Friday designations."
+    chips = (
         f"<div class='chip'><b>{out}</b><span>out or doubtful</span></div>"
         f"<div class='chip'><b>{quest}</b><span>questionable</span></div>"
-        f"</div><div class='foot'>{html.escape(detail)}</div></div>"
+        f"<div class='chip'><b>{practice_n}</b><span>DNP or limited</span></div>"
+    )
+    return (
+        f'<div class="panel"><div class="panel-h">{html.escape(team)} availability</div>'
+        f'<div class="chips" style="margin:0">{chips}</div>'
+        f"<div class='foot'>{html.escape(detail)}</div></div>"
     )
 
 
@@ -538,7 +604,7 @@ def _form_panel(c: dict) -> str:
             f'Turnover margin <b>{_fmt(c.get(f"rec_to_diff_{side}"), 1, signed=True)}</b></div></div>'
         )
     return (
-        '<div class="panel"><div class="panel-h">Recent form — last 3 games</div>'
+        '<div class="panel"><div class="panel-h">Recent form - last 3 games</div>'
         f'<div class="split">{"".join(sides)}</div></div>'
     )
 
@@ -594,14 +660,14 @@ def render_matchup(c: dict) -> None:
 
     colors = pair_colors(away, home)
     if not _has_unit_data(c):
-        st.info("Season statistics start once teams have played, so only the market line, weather and injuries are available this week.")
+        st.info("No prior completed games, so season statistics are not available yet; only the market line, weather and injuries are shown.")
         _render_glossary()
         return
 
     st.markdown(
         f'<div class="chips" style="margin-top:1rem"><div class="chip"><span>Bars compare</span>'
         f'<b style="color:{colors[0]}">{html.escape(away)}</b><span>left vs</span>'
-        f'<b style="color:{colors[1]}">{html.escape(home)}</b><span>right — the brighter bar is the better number</span></div></div>',
+        f'<b style="color:{colors[1]}">{html.escape(home)}</b><span>right - the brighter bar is the better number</span></div></div>',
         unsafe_allow_html=True,
     )
 
@@ -612,7 +678,7 @@ def render_matchup(c: dict) -> None:
     ]
     panels = []
     for title, metrics in _GROUPS:
-        footer = f"Top pressure producers — {' · '.join(rush_bits)}" if title == "Trenches" and rush_bits else ""
+        footer = f"Top pressure producers - {' · '.join(rush_bits)}" if title == "Trenches" and rush_bits else ""
         panels.append(_cmp_panel(title, metrics, c, colors, footer))
     panels.append(_form_panel(c))
     panels = [p for p in panels if p]
@@ -627,8 +693,28 @@ def render_matchup(c: dict) -> None:
     _render_glossary()
 
 
-_STATUS_LABEL = {"out": "OUT", "doubtful": "Doubtful", "questionable": "Questionable"}
-_STATUS_RANK = {"out": 0, "doubtful": 1, "questionable": 2}
+_STATUS_LABEL = {
+    "out": "OUT",
+    "doubtful": "Doubtful",
+    "dnp": "DNP",
+    "limited": "Limited",
+    "questionable": "Questionable",
+    "ir": "IR",
+    "pup": "PUP",
+    "nfi": "NFI",
+    "suspended": "Suspended",
+}
+_STATUS_RANK = {
+    "out": 0,
+    "doubtful": 1,
+    "dnp": 2,
+    "limited": 3,
+    "questionable": 4,
+    "ir": 5,
+    "pup": 6,
+    "nfi": 7,
+    "suspended": 8,
+}
 
 
 def _injury_table(rows: list[dict], with_game: str | None = None) -> list[dict]:
@@ -653,7 +739,7 @@ _INJURY_CONFIG = {
     "Team": st.column_config.TextColumn("Team", width=70),
     "Player": st.column_config.TextColumn("Player", width="medium"),
     "Pos": st.column_config.TextColumn("Pos", help="Listed position", width=60),
-    "Status": st.column_config.TextColumn("Status", help="Official game status on the nflverse report", width=120),
+    "Status": st.column_config.TextColumn("Status", help="Official game status, or DNP / limited from practice when Friday designations are not posted yet", width=120),
     "Starter": st.column_config.CheckboxColumn("Starter", help="Rank-one on the depth chart or a heavy snap player last week", width=80),
     "Injury": st.column_config.TextColumn("Injury", width="small"),
     "Practice": st.column_config.TextColumn("Practice", help="Most recent practice participation", width="medium"),
@@ -669,7 +755,7 @@ def render_injuries(c: dict) -> None:
 
     rows = list(c.get("injuries_away_rows") or []) + list(c.get("injuries_home_rows") or [])
     if not rows:
-        st.info("No players listed out, doubtful or questionable for this game.")
+        st.info("No injury or practice-report listings for this game yet.")
         return
     rows.sort(key=lambda r: (_STATUS_RANK.get(r.get("status"), 9), not r.get("is_starter"), r.get("team") or ""))
     st.dataframe(
@@ -679,7 +765,10 @@ def render_injuries(c: dict) -> None:
         height=_grid_height(len(rows)),
         column_config=_INJURY_CONFIG,
     )
-    st.caption("Full nflverse report: out, doubtful and questionable, starters first.")
+    st.caption(
+        "Official Out / Doubtful / Questionable when posted. Before Friday, nflverse often has "
+        "only practice participation (DNP / limited), which is shown here."
+    )
 
 
 # --------------------------------------------------------------------------- league pages
@@ -733,9 +822,9 @@ def _team_config(elos: list[float]) -> dict:
             help="Points nfelo expects this team to beat an average opponent by on a neutral field.",
             format="%+.1f", width=105,
         ),
-        "Off EPA/g": st.column_config.NumberColumn("Off EPA/g", help="Offensive expected points added per game — higher is better.", format="%.1f", width=100),
-        "Def EPA/g": st.column_config.NumberColumn("Def EPA/g", help="Expected points allowed per game — lower is better.", format="%.1f", width=100),
-        "Net EPA/g": st.column_config.NumberColumn("Net EPA/g", help="Offensive EPA per game minus defensive EPA allowed per game — overall efficiency.", format="%+.1f", width=100),
+        "Off EPA/g": st.column_config.NumberColumn("Off EPA/g", help="Offensive expected points added per game - higher is better.", format="%.1f", width=100),
+        "Def EPA/g": st.column_config.NumberColumn("Def EPA/g", help="Expected points allowed per game - lower is better.", format="%.1f", width=100),
+        "Net EPA/g": st.column_config.NumberColumn("Net EPA/g", help="Offensive EPA per game minus defensive EPA allowed per game - overall efficiency.", format="%+.1f", width=100),
         "PF/g": st.column_config.NumberColumn("PF/g", help="Points scored per game", format="%.1f", width=75),
         "PA/g": st.column_config.NumberColumn("PA/g", help="Points allowed per game", format="%.1f", width=75),
         "TO": st.column_config.NumberColumn("TO", help="Season turnover margin: takeaways minus giveaways", format="%+.0f", width=70),
@@ -748,7 +837,7 @@ def _render_team_grid(
     season: int, week: int, *, columns: list[str], key: str, sort_by: str | None, caption: str
 ) -> None:
     if not _league_teams(season, week):
-        st.info("No team-week stats published for this season yet.")
+        st.info("No prior completed games for this season yet.")
         return
     st.markdown(f"#### Season to date, through week {max(week - 1, 0)}")
     scope = st.segmented_control(
@@ -793,6 +882,196 @@ def _render_team_stats(season: int, week: int) -> None:
     )
 
 
+
+def _logo_plot(rows: list[dict], x: str, y: str, extras: list[str] | None = None) -> list[dict]:
+    extras = extras or []
+    plot = []
+    for r in rows:
+        team = r.get("Team") or r.get("team")
+        if not team:
+            continue
+        item = {
+            "Team": team,
+            "Club": team_name(team),
+            "Logo": logo_url(team),
+            x: r.get(x),
+            y: r.get(y),
+        }
+        for key in extras:
+            item[key] = r.get(key)
+        plot.append(item)
+    return plot
+
+
+def _wide_table(rows: list[dict], columns: list[tuple[str, str]]) -> tuple[list[dict], dict]:
+    """Source-stat catalog. A-Z by team. Click a column header in the table to sort."""
+    table = []
+    for r in rows:
+        team = r.get("team")
+        row = {"Team": team, "Club": team_name(team)}
+        for label, key in columns:
+            val = r.get(key)
+            row[label] = _nan(val) if not isinstance(val, str) else val
+        table.append(row)
+    table.sort(key=lambda row: (row.get("Team") or ""))
+    config = {
+        "Team": st.column_config.TextColumn("Team", width=70),
+        "Club": st.column_config.TextColumn("Club", width="medium"),
+    }
+    for label, _key in columns:
+        config[label] = st.column_config.NumberColumn(label, format="%.1f", width=90)
+    return table, config
+
+def _render_special_teams(season: int, week: int) -> None:
+    from data.adj_epa_viz import logo_scatter
+
+    rows = _st_teams(season, week)
+    if not rows:
+        st.info("Need completed games before special teams totals can be shown.")
+        return
+    st.markdown(f"#### Special teams, through week {max(week - 1, 0)}")
+    st.caption(
+        "The scatter is kickoff yards vs punt yards: return average minus coverage average on each unit. "
+        "Rank is ST EPA/g, which also folds in field goals, extra points, and turnovers."
+    )
+    table = []
+    for rank, r in enumerate(rows, start=1):
+        team = r["team"]
+        table.append(
+            {
+                "Rk": rank,
+                "Team": team,
+                "Club": team_name(team),
+                "Division": division(team),
+                "ST EPA/g": _nan(r.get("st_epa_pg")),
+                "KO yds": _nan(r.get("ko_yards_pk")),
+                "Punt yds": _nan(r.get("punt_yards_pp")),
+                "KR avg": _nan(r.get("kr_avg")),
+                "KR all avg": _nan(r.get("kr_allowed_avg")),
+                "PR avg": _nan(r.get("pr_avg")),
+                "PR all avg": _nan(r.get("pr_allowed_avg")),
+                "Net punt": _nan(r.get("punt_net_avg")),
+                "ST TO": _nan(r.get("st_to_diff")),
+                "Give": _nan(r.get("st_to_given")),
+                "Take": _nan(r.get("st_to_taken")),
+                "ST TDs": _nan(r.get("special_teams_tds")),
+                "FG%": None if r.get("fg_pct") is None else 100.0 * r["fg_pct"],
+                "FG": (
+                    f"{int(r['fg_made'])}/{int(r['fg_att'])}"
+                    if r.get("fg_made") is not None and r.get("fg_att") is not None
+                    else "-"
+                ),
+                "G": _nan(r.get("games")),
+            }
+        )
+    has_yards = any(r.get("KO yds") == r.get("KO yds") for r in table)
+    if has_yards:
+        plot_src = [
+            {
+                "Team": r["Team"],
+                "Club": r["Club"],
+                "Logo": logo_url(r["Team"]),
+                "KO yds": r["KO yds"],
+                "Punt yds": r["Punt yds"],
+                "ST EPA/g": r["ST EPA/g"],
+                "ST TO": r["ST TO"],
+                "ST TDs": r["ST TDs"],
+                "FG%": r["FG%"],
+            }
+            for r in table
+        ]
+        st.vega_lite_chart(
+            logo_scatter(
+                plot_src,
+                "KO yds",
+                "Punt yds",
+                x_title="Kickoff yards (KR avg minus coverage avg)   --> better",
+                y_title="Punt yards (PR avg minus coverage avg)   --> better",
+                origin="zero",
+                extra_tips=["ST EPA/g", "ST TO", "ST TDs", "FG%"],
+            ),
+            width="stretch",
+            theme=None,
+        )
+    else:
+        plot_src = [
+            {
+                "Team": r["Team"],
+                "Club": r["Club"],
+                "Logo": logo_url(r["Team"]),
+                "FG%": r["FG%"],
+                "Net punt": r["Net punt"],
+                "ST TDs": r["ST TDs"],
+            }
+            for r in table
+        ]
+        st.vega_lite_chart(
+            logo_scatter(
+                plot_src,
+                "FG%",
+                "Net punt",
+                x_title="FG%   --> better",
+                y_title="Net punt yards   --> better",
+                extra_tips=["ST TDs"],
+            ),
+            width="stretch",
+            theme=None,
+        )
+    st.dataframe(
+        table,
+        hide_index=True,
+        width="stretch",
+        height=_grid_height(len(table), cap=1240),
+        column_config={
+            "Rk": st.column_config.NumberColumn("Rk", help="Rank by special-teams EPA per game", format="%.0f", width=50),
+            "Team": st.column_config.TextColumn("Team", width=70),
+            "Club": st.column_config.TextColumn("Club", width="medium"),
+            "Division": st.column_config.TextColumn("Division", width=110),
+            "ST EPA/g": st.column_config.NumberColumn(
+                "ST EPA/g",
+                help="Expected points added on kickoffs, punts, field goals, and extra points, per game. Includes ST turnovers.",
+                format="%+.2f",
+                width=95,
+            ),
+            "KO yds": st.column_config.NumberColumn(
+                "KO yds",
+                help="Average kickoff return minus average return allowed on your kickoffs. Per kickoff, so scoring a lot does not look like bad coverage.",
+                format="%+.1f",
+                width=85,
+            ),
+            "Punt yds": st.column_config.NumberColumn(
+                "Punt yds",
+                help="Average punt return minus average return allowed on your punts. Per punt, same idea as kickoff yards.",
+                format="%+.1f",
+                width=90,
+            ),
+            "KR avg": st.column_config.NumberColumn("KR avg", help="Yards per kickoff return", format="%.1f", width=80),
+            "KR all avg": st.column_config.NumberColumn("KR all avg", help="Yards per kickoff return allowed on your kickoffs", format="%.1f", width=95),
+            "PR avg": st.column_config.NumberColumn("PR avg", help="Yards per punt return", format="%.1f", width=80),
+            "PR all avg": st.column_config.NumberColumn("PR all avg", help="Yards per punt return allowed on your punts", format="%.1f", width=95),
+            "Net punt": st.column_config.NumberColumn("Net punt", help="Net yards per punt: gross minus return yards", format="%.1f", width=90),
+            "ST TO": st.column_config.NumberColumn(
+                "ST TO",
+                help="Special-teams turnover margin: muffs, lost fumbles, and blocked punts. Blocked field goals count in ST EPA and FG%, not here.",
+                format="%+.0f",
+                width=75,
+            ),
+            "Give": st.column_config.NumberColumn("Give", help="ST giveaways: muffs, lost fumbles, blocked punts", format="%.0f", width=70),
+            "Take": st.column_config.NumberColumn("Take", help="ST takeaways: recovered muffs/fumbles and blocked punts", format="%.0f", width=70),
+            "ST TDs": st.column_config.NumberColumn("ST TDs", help="Special teams touchdowns this season", format="%.0f", width=75),
+            "FG%": st.column_config.NumberColumn("FG%", help="Field goals made / attempted this season", format="%.1f", width=70),
+            "FG": st.column_config.TextColumn("FG", help="Field goals made / attempted", width=70),
+            "G": st.column_config.NumberColumn("G", help="Games played", format="%.0f", width=55),
+        },
+    )
+    st.caption(
+        "Play-by-play kickoffs, punts, field goals, and extra points. "
+        "Kickoff yards and punt yards are return average minus coverage average, so volume from scoring does not dominate. "
+        "ST turnovers are muffs, lost fumbles, and blocked punts. "
+        "ST EPA is the one number that also includes kicking. FG% is made over attempted for the season."
+    )
+
+
 def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
     st.markdown(f"#### Week {week} injury report")
     rows = []
@@ -801,15 +1080,15 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
         for r in list(c.get("injuries_away_rows") or []) + list(c.get("injuries_home_rows") or []):
             rows.append({**r, "_game": game})
     if not rows:
-        st.info("The nflverse injury file has no out, doubtful or questionable listings for this week yet.")
+        st.info("The nflverse injury file has no listings for this week yet.")
         return
 
-    statuses = ["OUT", "Doubtful", "Questionable"]
+    statuses = list(_STATUS_LABEL.values())
     f1, f2, f3 = st.columns([2.2, 2.8, 1.6], vertical_alignment="bottom")
     with f1:
-        picked_status = st.segmented_control(
-            "Status", statuses, default=statuses, selection_mode="multi",
-            label_visibility="collapsed", key="inj_status",
+        picked_status = st.multiselect(
+            "Status", statuses, default=statuses, placeholder="All statuses",
+            label_visibility="collapsed", key="inj_status"
         ) or statuses
     with f2:
         teams = sorted({r.get("team") for r in rows if r.get("team")})
@@ -852,18 +1131,348 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
         height=_grid_height(len(table)),
         column_config={**_INJURY_CONFIG, "Game": st.column_config.TextColumn("Game", width=110)},
     )
-    st.caption("Source: nflverse weekly injury reports. Starters come from depth charts and last week's snap counts.")
+    st.caption(
+        "Source: nflverse weekly injury reports. Mid-week rows are often DNP or limited until "
+        "Friday game designations. Starters come from depth charts and last week's snap counts."
+    )
+
+
+
+
+_NFLVERSE_SECTIONS: dict[str, list[tuple[str, str]]] = {
+    "Passing": [
+        ("Cmp", "completions"),
+        ("Att", "attempts"),
+        ("Cmp%", "cmp_pct"),
+        ("Pass yds", "passing_yards"),
+        ("Pass TD", "passing_tds"),
+        ("INT", "passing_interceptions"),
+        ("Sacks", "sacks_suffered"),
+        ("Sack yds", "sack_yards_lost"),
+        ("Air yds", "passing_air_yards"),
+        ("YAC", "passing_yards_after_catch"),
+        ("1st", "passing_first_downs"),
+        ("EPA", "passing_epa"),
+        ("CPOE", "passing_cpoe"),
+        ("10+", "passing_10"),
+        ("20+", "passing_20"),
+        ("40+", "passing_40"),
+    ],
+    "Rushing": [
+        ("Carries", "carries"),
+        ("Rush yds", "rushing_yards"),
+        ("YPC", "ypc"),
+        ("Rush TD", "rushing_tds"),
+        ("Fum", "rushing_fumbles"),
+        ("Fum lost", "rushing_fumbles_lost"),
+        ("1st", "rushing_first_downs"),
+        ("EPA", "rushing_epa"),
+        ("10+", "rushing_10"),
+        ("20+", "rushing_20"),
+        ("40+", "rushing_40"),
+    ],
+    "Receiving": [
+        ("Rec", "receptions"),
+        ("Tgt", "targets"),
+        ("Catch%", "catch_pct"),
+        ("Rec yds", "receiving_yards"),
+        ("Rec TD", "receiving_tds"),
+        ("Air yds", "receiving_air_yards"),
+        ("YAC", "receiving_yards_after_catch"),
+        ("1st", "receiving_first_downs"),
+        ("EPA", "receiving_epa"),
+        ("10+", "receiving_10"),
+        ("20+", "receiving_20"),
+        ("40+", "receiving_40"),
+    ],
+    "Defense": [
+        ("Solo", "def_tackles_solo"),
+        ("Ast", "def_tackle_assists"),
+        ("TFL", "def_tackles_for_loss"),
+        ("Sacks", "def_sacks"),
+        ("Sack yds", "def_sack_yards"),
+        ("QB hits", "def_qb_hits"),
+        ("INT", "def_interceptions"),
+        ("PD", "def_pass_defended"),
+        ("Def TD", "def_tds"),
+        ("FF", "def_fumbles_forced"),
+        ("Safeties", "def_safeties"),
+        ("Punt blk", "def_punt_blocks"),
+        ("FG blk", "def_fg_blocks"),
+        ("PAT blk", "def_pat_blocks"),
+    ],
+    "Special teams": [
+        ("FG%", "fg_pct"),
+        ("PAT%", "pat_pct"),
+        ("Punt att", "pt_att"),
+        ("Net punt", "punt_net_avg"),
+        ("In 20", "inside_20_pct"),
+        ("PR yds", "punt_return_yards"),
+        ("KR yds", "kickoff_return_yards"),
+        ("ST TDs", "special_teams_tds"),
+        ("FG long", "fg_long"),
+    ],
+    "Ball / flags": [
+        ("Pen", "penalties"),
+        ("Pen yds", "penalty_yards"),
+        ("Fum lost", "fumbles_lost_total"),
+        ("Fum rec", "fumble_recovery_opp"),
+        ("Own rec", "fumble_recovery_own"),
+        ("G", "games"),
+    ],
+}
+
+_NGS_SECTIONS = {
+    "Passing": {
+        "columns": [
+            ("Att", "attempts"),
+            ("Cmp", "completions"),
+            ("Pass yds", "pass_yards"),
+            ("TD", "pass_tds"),
+            ("INT", "interceptions"),
+            ("Rating", "passer_rating"),
+            ("TTT", "avg_time_to_throw"),
+            ("CPOE", "completion_percentage_above_expectation"),
+            ("xComp%", "expected_completion_percentage"),
+            ("Int air", "avg_intended_air_yards"),
+            ("Comp air", "avg_completed_air_yards"),
+            ("Air diff", "avg_air_yards_differential"),
+            ("Agg%", "aggressiveness"),
+            ("Air to sticks", "avg_air_yards_to_sticks"),
+            ("Max air", "max_completed_air"),
+        ],
+        "x": "CPOE",
+        "y": "TTT",
+        "x_key": "completion_percentage_above_expectation",
+        "y_key": "avg_time_to_throw",
+        "x_title": "CPOE   --> better",
+        "y_title": "Time to throw (seconds)",
+        "sort": "CPOE",
+        "key": "passing",
+    },
+    "Rushing": {
+        "columns": [
+            ("Att", "rush_att"),
+            ("Yds", "rush_yards"),
+            ("YPC", "ypc"),
+            ("TD", "rush_tds"),
+            ("RYOE", "ryoe"),
+            ("RYOE/att", "ryoe_per_att"),
+            ("Eff", "efficiency"),
+            ("8+ box%", "percent_attempts_gte_eight_defenders"),
+            ("Time to LOS", "avg_time_to_los"),
+            ("% over exp", "rush_pct_over_expected"),
+        ],
+        "x": "RYOE/att",
+        "y": "8+ box%",
+        "x_key": "ryoe_per_att",
+        "y_key": "percent_attempts_gte_eight_defenders",
+        "x_title": "RYOE per attempt   --> better",
+        "y_title": "Share of rushes vs 8+ in the box",
+        "sort": "RYOE/att",
+        "key": "rushing",
+    },
+    "Receiving": {
+        "columns": [
+            ("Tgt", "targets"),
+            ("Rec", "receptions"),
+            ("Catch%", "catch_pct"),
+            ("Yds", "rec_yards"),
+            ("TD", "rec_tds"),
+            ("Cushion", "avg_cushion"),
+            ("Sep", "avg_separation"),
+            ("Int air", "avg_intended_air_yards"),
+            ("YAC", "avg_yac"),
+            ("xYAC", "avg_expected_yac"),
+            ("YAC OE", "avg_yac_above_expectation"),
+        ],
+        "x": "Sep",
+        "y": "YAC OE",
+        "x_key": "avg_separation",
+        "y_key": "avg_yac_above_expectation",
+        "x_title": "Avg separation (yards)   --> more space",
+        "y_title": "YAC over expected   --> better",
+        "sort": "YAC OE",
+        "key": "receiving",
+    },
+}
+
+
+def _render_nflverse_page(season: int, week: int) -> None:
+    rows = _nflverse_wide(season, week)
+    if not rows:
+        st.info("Need completed games before the nflverse table can be shown.")
+        return
+    st.markdown(f"#### nflverse team stats, through week {max(week - 1, 0)}")
+    st.caption(
+        "Season totals from the nflverse team-week file, A-Z by team. Click a column header to sort. "
+        "This is a source catalog, not a ranking. Lists of individual kicks are left out."
+    )
+    section = st.segmented_control(
+        "Unit",
+        list(_NFLVERSE_SECTIONS),
+        default="Passing",
+        label_visibility="collapsed",
+        key="nflverse_unit",
+    ) or "Passing"
+    cols = _NFLVERSE_SECTIONS[section]
+    table, config = _wide_table(rows, cols)
+    st.dataframe(
+        table,
+        hide_index=True,
+        width="stretch",
+        height=_grid_height(len(table), cap=1240),
+        column_config=config,
+    )
+
+
+def _render_ngs_page(season: int, week: int) -> None:
+    from data.adj_epa_viz import logo_scatter
+
+    bundle = _ngs_wide(season, week)
+    st.markdown(f"#### Next Gen Stats, through week {max(week - 1, 0)}")
+    st.caption(
+        "NFL Next Gen Stats player-week files, rolled up to the team (weighted by attempts, rushes, or targets), A-Z. "
+        "Click a column header to sort. This is a source catalog, not a ranking. Separate from nflverse play-by-play."
+    )
+    section = st.segmented_control(
+        "Unit",
+        list(_NGS_SECTIONS),
+        default="Passing",
+        label_visibility="collapsed",
+        key="ngs_unit",
+    ) or "Passing"
+    spec = _NGS_SECTIONS[section]
+    rows = bundle.get(spec["key"]) or []
+    if not rows:
+        st.info("No Next Gen rows for that unit yet.")
+        return
+    table, config = _wide_table(rows, spec["columns"])
+    plot = _logo_plot(table, spec["x"], spec["y"])
+    st.vega_lite_chart(
+        logo_scatter(
+            plot,
+            spec["x"],
+            spec["y"],
+            x_title=spec["x_title"],
+            y_title=spec["y_title"],
+        ),
+        width="stretch",
+        theme=None,
+    )
+    st.dataframe(
+        table,
+        hide_index=True,
+        width="stretch",
+        height=_grid_height(len(table), cap=1240),
+        column_config=config,
+    )
+
+
+def _render_adj_epa(season: int, week: int) -> None:
+    from data.adj_epa_viz import adj_epa_scatter
+
+    view = st.segmented_control(
+        "Unit",
+        ["Adjusted EPA", "Special teams"],
+        default="Adjusted EPA",
+        label_visibility="collapsed",
+        key="adj_unit",
+    ) or "Adjusted EPA"
+    if view == "Special teams":
+        _render_special_teams(season, week)
+        return
+
+    rows = _adj_epa(season, week)
+    if not rows:
+        st.info("Need completed games before opponent-adjusted EPA can be computed.")
+        return
+
+    through = max(week - 1, 0)
+    st.markdown(f"#### Opponent-adjusted EPA, through week {through}")
+    st.caption("nflverse play-by-play, opponent-adjusted EPA/g")
+    with st.expander("How Adjusted EPA is calculated"):
+        st.markdown(
+            """
+**Adj Off EPA = Off EPA - (Opp Def EPA - League Off EPA)**  
+**Adj Def EPA = Def EPA allowed - (Opp Off EPA - League Off EPA)**  
+**Adj Net = Adj Off - Adj Def**
+
+A team's own games all count. Opp Def / Opp Off use that opponent's *other* games. Opponent ratings are shrunk toward league average: weight = n / (n + 4).
+            """
+        )
+    plot = [
+        {
+            "Team": r["team"],
+            "Club": team_name(r["team"]),
+            "Adj Off": r.get("adj_off_epa_pg"),
+            "Adj Def": r.get("adj_def_epa_pg"),
+            "Adj Net": r.get("adj_net_epa_pg"),
+            "Color": display_color(r["team"]),
+            "Logo": logo_url(r["team"]),
+        }
+        for r in rows
+    ]
+    st.vega_lite_chart(adj_epa_scatter(plot), width="stretch", theme=None)
+
+    table = []
+    for rank, r in enumerate(rows, start=1):
+        team = r["team"]
+        table.append(
+            {
+                "Rk": rank,
+                "Team": team,
+                "Club": team_name(team),
+                "Adj Off": _nan(r.get("adj_off_epa_pg")),
+                "Adj Def": _nan(r.get("adj_def_epa_pg")),
+                "Adj Net": _nan(r.get("adj_net_epa_pg")),
+                "Raw Off": _nan(r.get("off_epa_pg")),
+                "Raw Def": _nan(r.get("def_epa_pg")),
+                "Adj Pass": _nan(r.get("adj_pass_epa_pg")),
+                "Adj Rush": _nan(r.get("adj_rush_epa_pg")),
+                "Opp Def": _nan(r.get("sos_off")),
+                "Opp Off": _nan(r.get("sos_def")),
+                "G": _nan(r.get("games")),
+            }
+        )
+    st.dataframe(
+        table,
+        hide_index=True,
+        width="stretch",
+        height=_grid_height(len(table), cap=1240),
+        column_config={
+            "Rk": st.column_config.NumberColumn("Rk", help="Rank by adjusted net EPA/g", format="%.0f", width=50),
+            "Team": st.column_config.TextColumn("Team", width=70),
+            "Club": st.column_config.TextColumn("Club", width="medium"),
+            "Adj Off": st.column_config.NumberColumn("Adj Off", help="Offensive EPA/g after opponent adjustment - higher is better", format="%+.1f", width=90),
+            "Adj Def": st.column_config.NumberColumn("Adj Def", help="Defensive EPA allowed/g after opponent adjustment - lower is better", format="%+.1f", width=90),
+            "Adj Net": st.column_config.NumberColumn("Adj Net", help="Adj Off minus Adj Def - overall unit quality after schedule", format="%+.1f", width=90),
+            "Raw Off": st.column_config.NumberColumn("Raw Off", help="Unadjusted offensive EPA/g", format="%+.1f", width=90),
+            "Raw Def": st.column_config.NumberColumn("Raw Def", help="Unadjusted defensive EPA allowed/g", format="%+.1f", width=90),
+            "Adj Pass": st.column_config.NumberColumn("Adj Pass", help="Opponent-adjusted passing EPA/g", format="%+.1f", width=90),
+            "Adj Rush": st.column_config.NumberColumn("Adj Rush", help="Opponent-adjusted rushing EPA/g", format="%+.1f", width=90),
+            "Opp Def": st.column_config.NumberColumn("Opp Def", help="Average EPA the defenses faced usually allow (higher = easier offensive schedule)", format="%+.1f", width=90),
+            "Opp Off": st.column_config.NumberColumn("Opp Off", help="Average EPA the offenses faced usually produce (higher = tougher defensive schedule)", format="%+.1f", width=90),
+            "G": st.column_config.NumberColumn("G", help="Games played", format="%.0f", width=55),
+        },
+    )
+    st.caption(
+        "Every game is in a team's own EPA. Leave-one-out only applies to opponent strength so this week's result is not counted twice. Shrunk with n/(n+4)."
+    )
 
 
 # --------------------------------------------------------------------------- routing
 
 
-def _set_view(season: int, week: int, game: str | None = None, view: str | None = None) -> None:
+def _set_view(season: int, week: int, game: str | None = None, view: str | None = None, theme: str | None = None) -> None:
     params = {"season": str(season), "week": str(week)}
     if game:
         params["game"] = game
     if view:
         params["view"] = view
+    chosen = theme or theme_from_query()
+    if chosen and chosen != "default":
+        params["theme"] = chosen
     st.query_params.clear()
     st.query_params.update(params)
 
@@ -878,8 +1487,8 @@ def _render_hub(cards: list[dict], season: int, week: int) -> None:
     """The week's games and the league-wide reference tables, all on one page."""
     if cards:
         st.markdown(_board_summary(cards), unsafe_allow_html=True)
-    board, power, stats, injuries, glossary = st.tabs(
-        ["Matchups", "Power ratings", "Team stats", "Injury report", "What the numbers mean"]
+    board, power, stats, adj, nflv, ngs, injuries = st.tabs(
+        ["Matchups", "Power ratings", "Team stats", "Adjusted EPA", "nflverse", "Next Gen", "Injury report"]
     )
     with board:
         if cards:
@@ -890,10 +1499,14 @@ def _render_hub(cards: list[dict], season: int, week: int) -> None:
         _render_power_ratings(season, week)
     with stats:
         _render_team_stats(season, week)
+    with adj:
+        _render_adj_epa(season, week)
+    with nflv:
+        _render_nflverse_page(season, week)
+    with ngs:
+        _render_ngs_page(season, week)
     with injuries:
         _render_league_injuries(cards, season, week)
-    with glossary:
-        _glossary_body()
 
 
 def _render_game(c: dict, season: int, week: int) -> None:
@@ -923,13 +1536,25 @@ def main() -> None:
     if qp_season not in seasons:
         qp_season = 2026
 
-    title_col, season_col, week_col = st.columns([6.8, 1.1, 1.1], vertical_alignment="bottom")
+    theme = theme_from_query()
+    apply_theme(theme)
+
+    title_col, theme_col, season_col, week_col = st.columns([5.2, 1.6, 1.1, 1.1], vertical_alignment="bottom")
     with title_col:
         st.markdown(
-            '<div class="masthead"><div class="rule"></div><h1>NFL Matchup Board</h1></div>'
-            '<div class="sub">Context for the pool — not predicted scores.</div>',
+            '<div class="masthead"><h1>NFL Matchup Board</h1></div>'
+            '<div class="sub">Sources: '
+            '<a href="https://nflverse.nflverse.com/" title="https://nflverse.nflverse.com/" target="_blank" rel="noopener noreferrer">nflverse</a> | '
+            '<a href="https://nextgenstats.nfl.com/" title="https://nextgenstats.nfl.com/" target="_blank" rel="noopener noreferrer">Next Gen Stats</a> | '
+            '<a href="https://www.pro-football-reference.com/" title="https://www.pro-football-reference.com/" target="_blank" rel="noopener noreferrer">PFR</a> | '
+            '<a href="https://www.nfeloapp.com/" title="https://www.nfeloapp.com/" target="_blank" rel="noopener noreferrer">nfelo</a> | '
+            '<a href="https://open-meteo.com/" title="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a>'
+            '</div>',
             unsafe_allow_html=True,
         )
+    with theme_col:
+        theme_label = st.selectbox("Theme", list(THEME_IDS), index=list(THEME_IDS.values()).index(theme))
+        theme = THEME_IDS[theme_label]
     with season_col:
         season = st.selectbox("Season", seasons, index=seasons.index(qp_season))
     try:
@@ -946,8 +1571,8 @@ def main() -> None:
     with week_col:
         week = st.selectbox("Week", weeks, index=weeks.index(qp_week))
 
-    if str(season) != str(qp.get("season", "")) or str(week) != str(qp.get("week", "")):
-        _set_view(season, week)
+    if str(season) != str(qp.get("season", "")) or str(week) != str(qp.get("week", "")) or theme != theme_from_query():
+        _set_view(season, week, theme=theme)
         st.rerun()
 
     try:

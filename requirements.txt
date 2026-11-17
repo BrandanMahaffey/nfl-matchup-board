@@ -1,3 +1,5 @@
-streamlit>=1.39
-polars>=1.0
-httpx>=0.27
+streamlit==1.64.0
+polars==1.44.2
+httpx==0.28.1
+altair==6.3.0
+tzdata==2026.4

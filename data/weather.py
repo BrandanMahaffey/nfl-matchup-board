@@ -126,6 +126,9 @@ def _fetch_forecast(lat: float, lon: float, day: date) -> dict[str, list] | None
     except (httpx.HTTPError, ValueError):
         return None
 
+    if not isinstance(payload, dict):
+        return None
+
     hourly = payload.get("hourly")
     if not isinstance(hourly, dict):
         return None

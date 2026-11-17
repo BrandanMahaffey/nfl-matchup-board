@@ -54,50 +54,36 @@ def _empty_nfelo_games() -> pl.DataFrame:
     )
 
 
-def load_elo_snapshot() -> pl.DataFrame:
-    """Latest per-team nfelo ratings from the nfelo GitHub snapshot."""
-    try:
-        df = load_csv(ELO_URL)
-    except RuntimeError:
-        return _empty_elo_snapshot()
-
+def load_elo_snapshot(season: int, week: int) -> pl.DataFrame:
+    """Latest available same-season ratings through the requested week."""
+    df = load_csv(ELO_URL)
+    required = {"team", "nfelo", "pts_vs_avg", "season", "week"}
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise ValueError(f"nfelo snapshot missing required columns: {', '.join(missing)}")
     if df.is_empty():
         return _empty_elo_snapshot()
 
-    required = {"team", "nfelo", "pts_vs_avg", "season", "week"}
-    if not required.issubset(df.columns):
-        return _empty_elo_snapshot()
-
-    if "team" in df.columns:
-        df = df.with_columns(
-            pl.col("team").map_elements(_alias_team, return_dtype=pl.Utf8)
-        )
-
-    latest_season = df.select(pl.col("season").max()).item()
-    latest_week = (
-        df.filter(pl.col("season") == latest_season)
-        .select(pl.col("week").max())
-        .item()
-    )
-
-    snapshot = df.filter(
-        (pl.col("season") == latest_season) & (pl.col("week") == latest_week)
-    )
-
+    snapshot = df.filter((pl.col("season") == season) & (pl.col("week") <= week))
     if snapshot.is_empty():
         return _empty_elo_snapshot()
-
+    snapshot = (
+        snapshot.sort("week")
+        .unique(subset=["team"], keep="last")
+        .with_columns(pl.col("team").map_elements(_alias_team, return_dtype=pl.Utf8))
+    )
     return snapshot.select("team", "nfelo", "pts_vs_avg")
-
 
 def load_nfelo_games(season: int) -> pl.DataFrame:
     """nfelo close-line game probabilities for ``season``."""
-    try:
-        df = load_csv(GAMES_URL)
-    except RuntimeError:
-        return _empty_nfelo_games()
-
-    if df.is_empty() or "game_id" not in df.columns:
+    df = load_csv(GAMES_URL)
+    if "game_id" not in df.columns:
+        raise ValueError("nfelo games source missing required column: game_id")
+    if not {"nfelo_home_probability_close", "nfelo_home_win_pct"} & set(df.columns):
+        raise ValueError("nfelo games source missing required home probability column")
+    if not {"nfelo_home_line_close", "nfelo_home_line"} & set(df.columns):
+        raise ValueError("nfelo games source missing required home line column")
+    if df.is_empty():
         return _empty_nfelo_games()
 
     prefix = f"{season}_"
