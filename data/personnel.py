@@ -32,6 +32,7 @@ _STATUS_ORDER = {
 }
 
 _OFFICIAL_STATUSES = {"out", "doubtful", "questionable", "ir", "pup", "nfi", "suspended"}
+_PERSISTENT_STATUSES = {"ir", "pup", "nfi", "suspended"}
 
 
 def _empty_injuries() -> pl.DataFrame:
@@ -46,6 +47,9 @@ def _empty_injuries() -> pl.DataFrame:
             "report_status": pl.String,
             "report_primary_injury": pl.String,
             "practice_status": pl.String,
+            "first_reported_week": pl.Int64,
+            "last_reported_week": pl.Int64,
+            "is_carried": pl.Boolean,
             "is_key": pl.Boolean,
         }
     )
@@ -177,44 +181,136 @@ def _normalise_depth_dates(df: pl.DataFrame) -> pl.DataFrame:
 
 
 
+def _date_modified_key(value: object) -> tuple[int, str]:
+    if value is None:
+        return (0, "")
+    try:
+        return (1, _normalise_feed_dt(value).isoformat())
+    except (TypeError, ValueError):
+        return (1, str(value))
+
+
+def _full_participation(row: dict) -> bool:
+    for value in (row.get("report_status"), row.get("practice_status")):
+        text = str(value or "").strip().lower().replace("-", " ")
+        if text in {"full", "full participation", "full participant", "active", "healthy"}:
+            return True
+    return False
+
+
+def _injury_identity(row: dict) -> tuple[str, str]:
+    team = canonical(row.get("team") or "")
+    gid = str(row.get("gsis_id") or "").strip()
+    return team, gid or _norm_name(row.get("full_name"))
+
+
+def _normalise_injury_rows(injuries: pl.DataFrame, through_week=None, teams=None) -> list[dict]:
+    allowed = _team_set(teams or []) if teams else None
+    rows = []
+    for order, source in enumerate(injuries.iter_rows(named=True)):
+        row = dict(source)
+        row["team"] = canonical(row.get("team") or "")
+        season_type = str(row.get("season_type") or "REG").upper()
+        if season_type != "REG":
+            continue
+        try:
+            row["week"] = int(row.get("week"))
+        except (TypeError, ValueError):
+            continue
+        if through_week is not None and row["week"] > through_week:
+            continue
+        if allowed is not None and row["team"] not in allowed:
+            continue
+        row["_identity"] = _injury_identity(row)
+        row["_source_order"] = order
+        row["_status_norm"] = _row_status(row.get("report_status"), row.get("practice_status"))
+        rows.append(row)
+    chosen = {}
+    for row in rows:
+        key = (row["_identity"], row["week"])
+        old = chosen.get(key)
+        if old is None or (_date_modified_key(row.get("date_modified")), row["_source_order"]) > (
+            _date_modified_key(old.get("date_modified")), old["_source_order"]
+        ):
+            chosen[key] = row
+    return sorted(chosen.values(), key=lambda row: (row["week"], row["_source_order"]))
+
+
+def injury_state_history(injuries: pl.DataFrame, through_week=None, teams=None) -> list[dict]:
+    """Pure snapshots of normalized current state after each reported week."""
+    source = _normalise_injury_rows(injuries, through_week, teams)
+    if not source:
+        return []
+    states, snapshots = {}, []
+    first_week = min(row["week"] for row in source)
+    last_week = through_week if through_week is not None else max(row["week"] for row in source)
+    weeks = range(first_week, last_week + 1)
+    for current_week in weeks:
+        reported = {row["_identity"] for row in source if row["week"] == current_week}
+        for identity in list(states):
+            if states[identity]["_status_norm"] not in _PERSISTENT_STATUSES and identity not in reported:
+                del states[identity]
+        for row in (r for r in source if r["week"] == current_week):
+            identity, status = row["_identity"], row["_status_norm"]
+            previous = states.get(identity)
+            if status is None:
+                if (
+                    _full_participation(row)
+                    or previous is not None
+                    and previous["_status_norm"] not in _PERSISTENT_STATUSES
+                ):
+                    states.pop(identity, None)
+                continue
+            item = dict(row)
+            item["first_reported_week"] = (
+                previous["first_reported_week"]
+                if previous is not None and previous["_status_norm"] == status else current_week
+            )
+            item["last_reported_week"] = current_week
+            item["is_carried"] = False
+            states[identity] = item
+        snapshot = []
+        for item in states.values():
+            out = {k: v for k, v in item.items() if not k.startswith("_")}
+            out["is_carried"] = out["last_reported_week"] != current_week
+            snapshot.append(out)
+        snapshot.sort(key=lambda row: (row.get("team", ""), row.get("full_name", "")))
+        snapshots.append({"week": current_week, "rows": snapshot})
+    return snapshots
+
+
+def derive_injury_states(injuries: pl.DataFrame, through_week: int, teams=None) -> pl.DataFrame:
+    history = injury_state_history(injuries, through_week, teams)
+    if not history or not history[-1]["rows"]:
+        return _empty_injuries()
+    return pl.DataFrame(history[-1]["rows"])
+
+
 def key_injuries(season: int, week: int, teams: list[str]) -> pl.DataFrame:
     url = f"{RELEASE}/injuries/injuries_{season}.csv"
     try:
-        df = load_csv(url)
+        df = derive_injury_states(load_csv(url), week, teams)
     except DataLoadError:
         return _empty_injuries()
-    df = _canonicalize_team_column(df)
-    df = df.filter(pl.col("team").is_in(_team_set(teams)), pl.col("week") == week)
     if df.is_empty():
-        return _empty_injuries()
-
+        return df
     official = pl.col("report_status").map_elements(_normalize_status, return_dtype=pl.String)
     practice = (
         pl.col("practice_status").map_elements(_practice_bucket, return_dtype=pl.String)
-        if "practice_status" in df.columns
-        else pl.lit(None, dtype=pl.String)
+        if "practice_status" in df.columns else pl.lit(None, dtype=pl.String)
     )
     df = df.with_columns(official.alias("_official"), practice.alias("_practice"))
     df = df.with_columns(
-        pl.when(pl.col("_official").is_not_null())
-        .then(pl.col("_official"))
-        .when(pl.col("_practice").is_in(["dnp", "limited"]))
-        .then(pl.col("_practice"))
-        .otherwise(None)
-        .alias("_status_norm")
-    )
-    df = df.filter(pl.col("_status_norm").is_not_null())
+        pl.when(pl.col("_official").is_not_null()).then(pl.col("_official"))
+        .when(pl.col("_practice").is_in(["dnp", "limited"])).then(pl.col("_practice"))
+        .otherwise(None).alias("_status_norm")
+    ).filter(pl.col("_status_norm").is_not_null())
     if df.is_empty():
         return _empty_injuries()
-    df = df.with_columns(
-        pl.col("position")
-        .map_elements(_is_key_position, return_dtype=pl.Boolean)
-        .alias("is_key"),
-        pl.col("_status_norm")
-        .replace_strict(_STATUS_ORDER, default=99)
-        .alias("_status_rank"),
-    )
-    return df.sort(["_status_rank", "is_key"], descending=[False, True]).drop(
+    return df.with_columns(
+        pl.col("position").map_elements(_is_key_position, return_dtype=pl.Boolean).alias("is_key"),
+        pl.col("_status_norm").replace_strict(_STATUS_ORDER, default=99).alias("_status_rank"),
+    ).sort(["_status_rank", "is_key"], descending=[False, True]).drop(
         "_status_norm", "_status_rank", "_official", "_practice"
     )
 
@@ -389,6 +485,9 @@ def injury_records(
                 "practice": (row.get("practice_status") or "").strip(),
                 "is_starter": is_starter,
                 "is_key": bool(row.get("is_key")),
+                "first_reported_week": row.get("first_reported_week"),
+                "last_reported_week": row.get("last_reported_week"),
+                "is_carried": bool(row.get("is_carried", False)),
             }
         )
     rows.sort(key=lambda r: (0 if r["is_starter"] else 1, _STATUS_ORDER.get(r["status"], 9), r["player"]))

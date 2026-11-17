@@ -95,11 +95,17 @@ class InterfaceTest(unittest.TestCase):
             "injury": "肩 <ankle>",
             "practice": "Limited",
             "game": "Thursday",
+            "first_reported_week": 2,
+            "last_reported_week": 4,
+            "is_carried": True,
         }]
         rendered = _mobile_injury_cards(rows, with_game=True)
-        for label in ("Team", "Player", "Pos", "Status", "Starter", "Injury", "Practice", "Game"):
+        for label in (
+            "Team", "Player", "Pos", "Status", "Starter", "Injury", "Practice",
+            "Since", "Last report", "Game",
+        ):
             self.assertIn(label, rendered)
-        for value in ("BUF", "QB", "Questionable", "Yes", "Limited", "Thursday"):
+        for value in ("BUF", "QB", "Questionable", "Yes", "Limited", "Wk 2", "Wk 4 · carried", "Thursday"):
             self.assertIn(value, rendered)
         self.assertIn("&lt;A &amp; B&gt;", rendered)
         self.assertIn("&lt;ankle&gt;", rendered)

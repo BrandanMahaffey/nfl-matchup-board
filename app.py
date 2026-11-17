@@ -151,6 +151,8 @@ st.markdown(
       [class*="st-key-reference_chart_"] [data-testid="stArrowVegaLiteChart"] {
         min-width: 0; max-width: 100%; box-sizing: border-box;
       }
+      .st-key-reference_chart_adj_epa_mobile { display: none; }
+      .st-key-reference_chart_adj_epa_desktop { display: block; }
       .st-key-game_navigation button { min-height: 44px; }
       @media (max-width: 820px) {
         [data-testid="stButtonGroup"] { min-width: 0; max-width: 100%; }
@@ -185,6 +187,10 @@ st.markdown(
         .st-key-league_injury_filters [data-testid="stToggle"] label { min-height: 44px; }
       }
       @media (max-width: 480px) {
+        .st-key-reference_chart_adj_epa_desktop { display: none; }
+        .st-key-reference_chart_adj_epa_mobile { display: block; }
+        .st-key-reference_chart_adj_epa_mobile [data-testid="stVegaLiteChart"],
+        .st-key-reference_chart_adj_epa_mobile [data-testid="stArrowVegaLiteChart"] { min-height: 0; }
         .st-key-game_metrics [data-testid="stHorizontalBlock"] { grid-template-columns: minmax(0, 1fr); }
         .st-key-game_navigation [data-testid="stHorizontalBlock"],
         .st-key-league_injury_filters [data-testid="stHorizontalBlock"] { flex-direction: column; }
@@ -869,6 +875,8 @@ _STATUS_RANK = {
 def _injury_table(rows: list[dict], with_game: str | None = None) -> list[dict]:
     table = []
     for r in rows:
+        first_week = r.get("first_reported_week")
+        last_week = r.get("last_reported_week")
         entry = {
             "Team": r.get("team"),
             "Player": r.get("player"),
@@ -877,6 +885,12 @@ def _injury_table(rows: list[dict], with_game: str | None = None) -> list[dict]:
             "Starter": bool(r.get("is_starter")),
             "Injury": r.get("injury") or "",
             "Practice": r.get("practice") or "",
+            "Since": f"Wk {first_week}" if first_week is not None else "",
+            "Last report": (
+                f"Wk {last_week} · carried"
+                if last_week is not None and r.get("is_carried")
+                else f"Wk {last_week}" if last_week is not None else ""
+            ),
         }
         if with_game:
             entry["Game"] = with_game
@@ -918,6 +932,8 @@ _INJURY_CONFIG = {
     "Starter": st.column_config.CheckboxColumn("Starter", help="Rank-one on the depth chart or a heavy snap player last week", width=80),
     "Injury": st.column_config.TextColumn("Injury", width="small"),
     "Practice": st.column_config.TextColumn("Practice", help="Most recent practice participation", width="medium"),
+    "Since": st.column_config.TextColumn("Since", help="First week of the current reported status", width=75),
+    "Last report": st.column_config.TextColumn("Last report", help="Latest source week; persistent IR/PUP/NFI/suspension states may be carried forward", width=125),
 }
 
 
@@ -942,8 +958,9 @@ def render_injuries(c: dict) -> None:
         column_config=_INJURY_CONFIG,
     )
     st.caption(
-        "Official Out / Doubtful / Questionable when posted. Before Friday, nflverse often has "
-        "only practice participation (DNP / limited), which is shown here."
+        "Current state through the selected week. Weekly Out / Doubtful / Questionable and practice "
+        "designations clear when absent from a later report; IR / PUP / NFI / suspension carry forward "
+        "from their last source week until superseded."
     )
 
 
@@ -1266,7 +1283,7 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
         for r in list(c.get("injuries_away_rows") or []) + list(c.get("injuries_home_rows") or []):
             rows.append({**r, "game": game})
     if not rows:
-        st.info("The nflverse injury file has no listings for this week yet.")
+        st.info("No current injury states through this week.")
         return
 
     statuses = list(_STATUS_LABEL.values())
@@ -1319,8 +1336,10 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
         column_config={**_INJURY_CONFIG, "Game": st.column_config.TextColumn("Game", width=110)},
     )
     st.caption(
-        "Source: nflverse weekly injury reports. Mid-week rows are often DNP or limited until "
-        "Friday game designations. Starters come from depth charts and last week's snap counts."
+        "Source: nflverse weekly injury reports. The selected week shows current weekly designations plus "
+        "unresolved IR / PUP / NFI / suspension states carried from their latest report. Since and Last report "
+        "retain source-week context; selecting an earlier week reconstructs that historical snapshot. "
+        "Starters come from depth charts and last week's snap counts."
     )
 
 
@@ -1600,7 +1619,12 @@ A team's own games all count. Opp Def / Opp Off use that opponent's *other* game
         }
         for r in rows
     ]
-    st.container(key="reference_chart_adj_epa").vega_lite_chart(adj_epa_scatter(plot), width="stretch", theme=None)
+    st.container(key="reference_chart_adj_epa_desktop").vega_lite_chart(
+        adj_epa_scatter(plot, height=660), width="stretch", theme=None
+    )
+    st.container(key="reference_chart_adj_epa_mobile").vega_lite_chart(
+        adj_epa_scatter(plot, height=300), width="stretch", theme=None
+    )
 
     table = []
     for rank, r in enumerate(rows, start=1):

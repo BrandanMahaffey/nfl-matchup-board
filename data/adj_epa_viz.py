@@ -156,7 +156,7 @@ def logo_scatter(
     return _finish(chart)
 
 
-def adj_epa_scatter(plot: list[dict]) -> dict:
+def adj_epa_scatter(plot: list[dict], height: int = 660) -> dict:
     return logo_scatter(
         plot,
         "Adj Off",
@@ -166,5 +166,5 @@ def adj_epa_scatter(plot: list[dict]) -> dict:
         reverse_y=True,
         origin="zero",
         extra_tips=["Adj Net"],
-        height=660,
+        height=height,
     )

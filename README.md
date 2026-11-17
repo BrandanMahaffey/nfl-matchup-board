@@ -9,14 +9,14 @@ The hub has seven tabs:
 - **Matchups** — phone and tablet widths (up to 820px) use responsive cards with kickoff, scores, odds, conditions, adjusted net, and a **View breakdown** link. Wider screens retain the sortable grid and row selection. Game links preserve season, week, and theme. Missing scores are labeled “Not available,” not inferred as final or live.
 - **Power ratings** — latest published current nfelo snapshot and comparisons (source weeks can vary by team; not strict historical/pregame ratings).
 - **Team stats** — season-to-date team form and league comparisons.
-- **Adjusted EPA** — opponent-adjusted offense, defense, and net views, with a Special teams subview.
+- **Adjusted EPA** — opponent-adjusted offense, defense, and net views, with a Special teams subview. The phone view uses a near-square plot area so identical X/Y EPA ranges retain comparable visual scale.
 - **nflverse** — nflverse team aggregate tables.
 - **Next Gen** — Next Gen Stats team aggregate views.
-- **Injury report** — the week's report with status, team, and starters-only filters.
+- **Injury report** — cumulative state through the selected week with status, team, and starters-only filters. Current weekly designations replace or clear prior weekly states; unresolved IR, PUP, NFI, and suspension states carry forward from their latest source report.
 
 The **game detail** view has a matchup hero (clubs, market and nfelo numbers), the reason the game stands out, availability, and side-by-side bars for passing, rushing, trenches, scoring, and special teams. Its compact phone layout keeps game-detail metrics and panels readable without removing any values. The **Injuries** section contains the full game injury report. The game detail view includes the metric glossary.
 
-On phones, injuries also appear as compact cards containing team, player, position, status, starter state, injury, practice, and (in game detail) game information; the desktop full tables remain unchanged. No rows or fields are discarded at any width. Reference tables and the glossary retain all content in contained internal scrolling regions. Theme/Season/Week controls and section tabs use touch-friendly targets, charts resize responsively for phone and tablet widths, and wider screens retain the sortable grid. Source links are tucked under **Sources**, and desktop grid instructions are omitted on smaller screens. Mobile cards follow schedule order; use the desktop grid for column sorting.
+On phones, injuries also appear as compact cards containing team, player, position, status, starter state, injury, practice, first status week, latest source week, and (in game detail) game information; the desktop full tables remain unchanged. No rows or fields are discarded at any width. Reference tables and the glossary retain all content in contained internal scrolling regions. Theme/Season/Week controls and section tabs use touch-friendly targets, Adjusted EPA uses a proportional phone-specific plot height, other charts resize responsively, and wider screens retain the sortable grid. Source links are tucked under **Sources**, and desktop grid instructions are omitted on smaller screens. Mobile cards follow schedule order; use the desktop grid for column sorting.
 
 ## Local setup
 
@@ -77,7 +77,7 @@ Cloud can sleep and cold-start time is variable, and public feeds can be unavail
 - External ESPN logos can fail independently of the board.
 - Play-by-play data can use substantial memory. Supported seasons are hardcoded to **2024–2026**, with a regular-season selector. Statistics through the prior week are available; week 1 has blank prior-week comparisons.
 - nfelo is a latest published current snapshot, not a historical archive: the board preserves each team's published source week and may show a mixed source-week range. No future or cross-season ratings are implied, and ratings are not strict historical/pregame values.
-- Historical 2024 depth weekly charts have coarse timestamps; newer charts use a timestamp cutoff. **Pressure %** is the team pressure rate, volume-weighted across quarterbacks within each week and across weeks, not the most-pressured-QB rate.
+- Historical 2024 depth weekly charts have coarse timestamps; newer charts use a timestamp cutoff. Injury snapshots are reconstructed from nflverse's week-by-week reports: weekly designations expire when absent from a later report, while unresolved IR/PUP/NFI/suspension states carry until a source row supersedes them; absence alone is not described as medical recovery. **Pressure %** is the team pressure rate, volume-weighted across quarterbacks within each week and across weeks, not the most-pressured-QB rate.
 - Mandatory schedule failures stop with an error. Optional source failures show a warning or missing values rather than silently presenting healthy-looking zeros.
 
 ## Maintenance priorities
