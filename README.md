@@ -12,7 +12,7 @@ The hub has seven tabs:
 - **Adjusted EPA** — opponent-adjusted offense, defense, and net views, with a Special teams subview. The phone view uses a near-square plot area so identical X/Y EPA ranges retain comparable visual scale.
 - **nflverse** — nflverse team aggregate tables.
 - **Next Gen** — Next Gen Stats team aggregate views.
-- **Injury report** — weekly game/practice status plus the selected week's IR, PUP, NFI, and suspension roster designations. Game/practice status, roster category, team, and starter filters are separate; the roster category filter can isolate IR or PUP players.
+- **Injury report** — weekly game/practice status plus the selected week's IR, PUP, NFI, and suspension roster designations. Game/practice statuses and roster lists are independent multi-select filters, so IR and PUP can be toggled together; each roster option shows its current player count.
 
 The **game detail** view has a matchup hero (clubs, market and nfelo numbers), the reason the game stands out, availability, and side-by-side bars for passing, rushing, trenches, scoring, and special teams. Its compact phone layout keeps game-detail metrics and panels readable without removing any values. The **Injuries** section combines the full game injury report with reserve-roster designations. The game detail view includes the metric glossary.
 

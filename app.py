@@ -1296,7 +1296,15 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
         return
 
     statuses = list(_STATUS_LABEL.values())
-    categories = ["All players", "Weekly report only", *_ROSTER_LABEL.values()]
+    roster_counts = {
+        label: sum(1 for row in rows if row.get("roster_status") == code)
+        for code, label in _ROSTER_LABEL.items()
+    }
+    roster_option_status = {
+        f"{label} ({roster_counts[label]})": code
+        for code, label in _ROSTER_LABEL.items()
+    }
+    roster_options = list(roster_option_status)
     f1, f2, f3, f4 = st.container(key="league_injury_filters").columns(
         [2.2, 2.0, 2.8, 1.6],
         vertical_alignment="bottom",
@@ -1304,33 +1312,32 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
     with f1:
         picked_status = st.multiselect(
             "Game/practice status", statuses, default=statuses, placeholder="No weekly statuses",
-            label_visibility="collapsed", key="inj_status"
+            key="inj_status"
         )
     with f2:
-        picked_category = st.selectbox(
-            "Report category", categories, label_visibility="collapsed", key="inj_category"
+        picked_roster = st.multiselect(
+            "Roster lists", roster_options, default=roster_options, placeholder="No roster lists",
+            key="inj_roster"
         )
     with f3:
         teams = sorted({r.get("team") for r in rows if r.get("team")})
         picked_teams = st.multiselect(
-            "Teams", teams, placeholder="All teams", label_visibility="collapsed", key="inj_teams"
+            "Teams", teams, placeholder="All teams", key="inj_teams"
         )
     with f4:
         starters_only = st.toggle("Starters only", key="inj_starters")
 
-    def category_matches(row: dict) -> bool:
-        weekly_match = _STATUS_LABEL.get(row.get("status"), "") in picked_status
-        roster_label = _ROSTER_LABEL.get(row.get("roster_status"), "")
-        if picked_category == "All players":
-            return weekly_match or bool(roster_label)
-        if picked_category == "Weekly report only":
-            return weekly_match
-        return roster_label == picked_category
-
+    picked_roster_statuses = {
+        roster_option_status[option]
+        for option in picked_roster
+    }
     filtered = [
         r
         for r in rows
-        if category_matches(r)
+        if (
+            _STATUS_LABEL.get(r.get("status"), "") in picked_status
+            or r.get("roster_status") in picked_roster_statuses
+        )
         and (not picked_teams or r.get("team") in picked_teams)
         and (not starters_only or r.get("is_starter"))
     ]

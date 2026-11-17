@@ -130,7 +130,7 @@ class InterfaceTest(unittest.TestCase):
         self.assertRegex(source, r"(?is)glossary.{0,250}(overflow|scroll)")
         self.assertRegex(source, r"(?is)reference.{0,250}(overflow|scroll)")
 
-    def test_injury_roster_category_filter_includes_ir_and_pup(self):
+    def test_injury_roster_lists_are_counted_additive_toggles(self):
         script = (
             "from app import _render_league_injuries\n"
             "_render_league_injuries([{"
@@ -143,15 +143,27 @@ class InterfaceTest(unittest.TestCase):
         )
         app = AppTest.from_string(script).run()
         self.assertFalse(app.exception)
-        self.assertNotIn("IR", app.multiselect[0].options)
-        categories = app.selectbox[0]
-        self.assertIn("IR", categories.options)
-        self.assertIn("PUP", categories.options)
-        categories.set_value("IR").run()
+        roster_lists = app.multiselect[1]
+        self.assertEqual(
+            roster_lists.options,
+            ["IR (1)", "PUP (1)", "NFI (0)", "Suspended (0)"],
+        )
+
+        app.multiselect[0].set_value([])
+        roster_lists.set_value(["IR (1)"])
+        app.run()
         self.assertFalse(app.exception)
         self.assertIn("A IR", str(app.dataframe[0].value))
         self.assertNotIn("B PUP", str(app.dataframe[0].value))
         self.assertNotIn("C OUT", str(app.dataframe[0].value))
+
+        app.multiselect[0].set_value(["OUT"])
+        app.multiselect[1].set_value(["PUP (1)"])
+        app.run()
+        self.assertFalse(app.exception)
+        self.assertNotIn("A IR", str(app.dataframe[0].value))
+        self.assertIn("B PUP", str(app.dataframe[0].value))
+        self.assertIn("C OUT", str(app.dataframe[0].value))
 
 
 if __name__ == "__main__":
