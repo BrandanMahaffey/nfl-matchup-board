@@ -1,4 +1,7 @@
 import unittest
+import html
+import re
+from urllib.parse import parse_qs, urlsplit
 
 from streamlit.testing.v1 import AppTest
 
@@ -24,6 +27,28 @@ def _matchup_script(card):
 
 
 class InterfaceTest(unittest.TestCase):
+    def test_phone_card_preserves_game_context_and_missing_scores(self):
+        card = {**_CARD, "game_id": "2026_01_BUF_KC", "home_score": 0, "away_score": 7}
+        script = (
+            "import streamlit as st\n"
+            "from app import _mobile_board\n"
+            "st.query_params['theme'] = 'light'\n"
+            f"st.markdown(_mobile_board([{card!r}], 2026, 1, {{}}), unsafe_allow_html=True)\n"
+        )
+        app = AppTest.from_string(script).run()
+        self.assertFalse(app.exception)
+        rendered = app.markdown[-1].value
+        href = html.unescape(re.search(r'href="([^"]+)"', rendered).group(1))
+        self.assertEqual(parse_qs(urlsplit(href).query), {
+            "season": ["2026"], "week": ["1"], "game": ["2026_01_BUF_KC"], "theme": ["light"],
+        })
+        self.assertIn("7-0", rendered)
+        self.assertIn("56%", rendered)
+        self.assertIn("View BUF at KC breakdown", rendered)
+        missing = AppTest.from_string(script.replace("'home_score': 0", "'home_score': None")).run()
+        self.assertFalse(missing.exception)
+        self.assertIn("Not available", missing.markdown[-1].value)
+
     def test_matchup_glossary_renders_with_and_without_unit_stats(self):
         empty = AppTest.from_string(_matchup_script(_CARD)).run()
         self.assertFalse(empty.exception)
@@ -31,13 +56,53 @@ class InterfaceTest(unittest.TestCase):
         glossary = " ".join(m.value for m in empty.expander[0].markdown)
         self.assertIn("Source", glossary)
         self.assertIn("Direction", glossary)
-        self.assertIn("Most-pressured QB rate", glossary)
+        self.assertIn("Pressure rate allowed", glossary)
 
         populated_card = {**_CARD, "u_h_pass": 0.2, "u_a_pass": 0.1}
         populated = AppTest.from_string(_matchup_script(populated_card)).run()
         self.assertFalse(populated.exception)
         self.assertTrue(populated.expander)
         self.assertIn("Pass EPA/g", " ".join(m.value for m in populated.expander[0].markdown))
+
+    def test_mobile_injury_cards_include_fields_escape_text_and_optional_game(self):
+        from app import _mobile_injury_cards
+
+        rows = [{
+            "team": "BUF",
+            "player": "<A & B>",
+            "position": "QB",
+            "status": "questionable",
+            "is_starter": True,
+            "injury": "肩 <ankle>",
+            "practice": "Limited",
+            "game": "Thursday",
+        }]
+        rendered = _mobile_injury_cards(rows, with_game=True)
+        for label in ("Team", "Player", "Pos", "Status", "Starter", "Injury", "Practice", "Game"):
+            self.assertIn(label, rendered)
+        for value in ("BUF", "QB", "Questionable", "Yes", "Limited", "Thursday"):
+            self.assertIn(value, rendered)
+        self.assertIn("&lt;A &amp; B&gt;", rendered)
+        self.assertIn("&lt;ankle&gt;", rendered)
+        self.assertNotIn("<A & B>", rendered)
+        self.assertNotIn("<ankle>", rendered)
+
+        without_game = _mobile_injury_cards(rows, with_game=False)
+        self.assertNotIn("Thursday", without_game)
+
+    def test_mobile_injury_cards_empty_input_is_safe(self):
+        from app import _mobile_injury_cards
+
+        self.assertEqual(_mobile_injury_cards([]), "")
+        self.assertEqual(_mobile_injury_cards(None), "")
+
+    def test_mobile_layout_keeps_glossary_and_reference_containment_scoped(self):
+        from pathlib import Path
+
+        source = Path(__file__).resolve().parents[1].joinpath("app.py").read_text(encoding="utf-8")
+        self.assertIn("@media (max-width: 480px)", source)
+        self.assertRegex(source, r"(?is)glossary.{0,250}(overflow|scroll)")
+        self.assertRegex(source, r"(?is)reference.{0,250}(overflow|scroll)")
 
     def test_injury_status_options_include_ir_and_filter(self):
         script = (

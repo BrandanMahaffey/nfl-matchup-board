@@ -22,7 +22,7 @@ _PRESSURE_COLS = [
     "top_rushers",
 ]
 
-_NGS_COLS = ["week", "team", "ttt", "ryoe"]
+_NGS_COLS = ["week", "team", "ttt", "ttt_attempts", "ryoe"]
 
 
 def _empty_pressure() -> pl.DataFrame:
@@ -47,9 +47,12 @@ def _empty_ngs() -> pl.DataFrame:
             "week": pl.Int64,
             "team": pl.String,
             "ttt": pl.Float64,
+            "ttt_attempts": pl.Float64,
             "ryoe": pl.Float64,
         }
     )
+
+
 
 
 def _top_rushers_by_week_team(def_df: pl.DataFrame) -> pl.DataFrame:
@@ -93,18 +96,49 @@ def team_pressure(season: int) -> pl.DataFrame:
         pl.col("times_hit").fill_null(0),
     )
 
-    # Pressure rate is retained from the most-pressured QB, while pressure
-    # and sack counts represent every QB on the team for that week.
+    # Weight each team's rate by a valid QB dropback denominator.
     qb_counts = pass_df.group_by(["week", "team"]).agg(
         pl.col("times_pressured").sum().alias("pressures_allowed"),
         pl.col("times_sacked").sum().alias("sacks_allowed"),
     )
-    qb_rate = (
-        pass_df.sort(["team", "week", "times_pressured"], descending=[False, False, True])
-        .unique(subset=["team", "week"], keep="first")
-        .select("week", "team", pl.col("times_pressured_pct").alias("pressure_pct_allowed"))
+    rate = pl.col("times_pressured_pct").cast(pl.Float64, strict=False)
+    rate_fraction = pl.when(rate.abs() <= 1.5).then(rate).otherwise(rate / 100.0)
+    denominator_candidates = [
+        c for c in ("dropbacks", "dropback", "attempts", "pass_attempts") if c in pass_df.columns
+    ]
+    derived_denominator = pl.when(
+        (pl.col("times_pressured") > 0) & (rate_fraction > 0)
+    ).then(pl.col("times_pressured") / rate_fraction).otherwise(None)
+    if denominator_candidates:
+        upstream_denominator = pl.coalesce(
+            [pl.col(c).cast(pl.Float64, strict=False) for c in denominator_candidates]
+        )
+        denominator = pl.when(
+            upstream_denominator.is_not_null()
+            & upstream_denominator.is_finite()
+            & (upstream_denominator > 0)
+        ).then(upstream_denominator).otherwise(derived_denominator)
+    else:
+        denominator = derived_denominator
+    valid = (
+        rate.is_not_null()
+        & rate.is_finite()
+        & (rate_fraction > 0)
+        & denominator.is_not_null()
+        & denominator.is_finite()
+        & (denominator > 0)
     )
-    qb_week = qb_counts.join(qb_rate, on=["week", "team"], how="left").select(
+    qb_rates = pass_df.with_columns(
+        pl.when(valid).then(rate).otherwise(None).alias("_rate"),
+        pl.when(valid).then(denominator).otherwise(None).alias("_denominator"),
+    )
+    team_rates = qb_rates.group_by(["week", "team"]).agg(
+        (
+            (pl.col("_rate") * pl.col("_denominator")).sum()
+            / pl.col("_denominator").sum()
+        ).alias("pressure_pct_allowed"),
+    )
+    qb_week = qb_counts.join(team_rates, on=["week", "team"], how="left").select(
         "week", "team", "pressures_allowed", "pressure_pct_allowed", "sacks_allowed"
     )
 
@@ -181,15 +215,30 @@ def team_ngs(season: int) -> pl.DataFrame:
     if pass_df.is_empty() and rush_df.is_empty():
         return _empty_ngs()
 
-    ttt_df = pl.DataFrame(schema={"week": pl.Int64, "team": pl.String, "ttt": pl.Float64})
+    ttt_df = pl.DataFrame(
+        schema={"week": pl.Int64, "team": pl.String, "ttt": pl.Float64, "ttt_attempts": pl.Float64}
+    )
     att_col = "attempts" if "attempts" in pass_df.columns else (
         "pass_attempts" if "pass_attempts" in pass_df.columns else None
     )
     if not pass_df.is_empty() and att_col and "avg_time_to_throw" in pass_df.columns:
+        valid = (
+            pl.col("avg_time_to_throw").is_not_null()
+            & pl.col("avg_time_to_throw").is_finite()
+            & pl.col(att_col).is_not_null()
+            & pl.col(att_col).is_finite()
+            & (pl.col(att_col) > 0)
+        )
         ttt_df = (
-            pass_df.sort(["team", "week", att_col], descending=[False, False, True])
-            .unique(subset=["team", "week"], keep="first")
-            .select("week", "team", pl.col("avg_time_to_throw").alias("ttt"))
+            pass_df.filter(valid)
+            .group_by(["week", "team"])
+            .agg(
+                (
+                    (pl.col("avg_time_to_throw") * pl.col(att_col)).sum()
+                    / pl.col(att_col).sum()
+                ).alias("ttt"),
+                pl.col(att_col).sum().alias("ttt_attempts"),
+            )
         )
 
     ryoe_df = pl.DataFrame(schema={"week": pl.Int64, "team": pl.String, "ryoe": pl.Float64})
@@ -201,13 +250,12 @@ def team_ngs(season: int) -> pl.DataFrame:
     if ttt_df.is_empty() and ryoe_df.is_empty():
         return _empty_ngs()
     if ttt_df.is_empty():
-        return ryoe_df.with_columns(pl.lit(None).cast(pl.Float64).alias("ttt")).select(
-            _NGS_COLS
-        )
+        return ryoe_df.with_columns(
+            pl.lit(None).cast(pl.Float64).alias("ttt"),
+            pl.lit(None).cast(pl.Float64).alias("ttt_attempts"),
+        ).select(_NGS_COLS)
     if ryoe_df.is_empty():
-        return ttt_df.with_columns(pl.lit(None).cast(pl.Float64).alias("ryoe")).select(
-            _NGS_COLS
-        )
+        return ttt_df.with_columns(pl.lit(None).cast(pl.Float64).alias("ryoe")).select(_NGS_COLS)
 
     return ttt_df.join(ryoe_df, on=["week", "team"], how="full", coalesce=True).select(
         _NGS_COLS

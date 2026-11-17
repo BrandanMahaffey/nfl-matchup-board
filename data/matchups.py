@@ -159,7 +159,13 @@ def _prep_form(season: int, week: int) -> tuple[pl.DataFrame, pl.DataFrame]:
     return season_df, recent_df
 
 
-def _agg_by_team(df: pl.DataFrame, through: int, means: list[str], sums: list[str]) -> pl.DataFrame:
+def _agg_by_team(
+    df: pl.DataFrame,
+    through: int,
+    means: list[str],
+    sums: list[str],
+    weighted_means: dict[str, str] | None = None,
+) -> pl.DataFrame:
     if df is None or df.is_empty() or "team" not in df.columns:
         return pl.DataFrame()
     work = df
@@ -171,6 +177,13 @@ def _agg_by_team(df: pl.DataFrame, through: int, means: list[str], sums: list[st
     for c in means:
         if c in work.columns:
             aggs.append(pl.col(c).mean().alias(c))
+    for c, weight in (weighted_means or {}).items():
+        if c in work.columns and weight in work.columns:
+            aggs.append(
+                (
+                    (pl.col(c) * pl.col(weight)).sum() / pl.col(weight).sum()
+                ).alias(c)
+            )
     for c in sums:
         if c in work.columns:
             aggs.append(pl.col(c).sum().alias(c))
@@ -395,7 +408,7 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
     through = week - 1 if week > 1 else 0
 
     season_df, recent_df = _prep_form(season, week)
-    elo = _safe(lambda: load_elo_snapshot(season, week), pl.DataFrame())
+    elo = _safe(lambda: load_elo_snapshot(season), pl.DataFrame())
     if not elo.is_empty() and "team" in elo.columns:
         elo = elo.with_columns(pl.col("team").replace(NFELO_TEAM, default=pl.col("team")))
     nfelo_games = _safe(lambda: load_nfelo_games(season), pl.DataFrame())
@@ -410,7 +423,9 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
         means=["pressure_pct_allowed"],
         sums=["pressures_allowed", "pressures_generated", "sacks_allowed", "sacks_generated", "hurries_generated"],
     )
-    ngs_team = _agg_by_team(ngs, through, means=["ttt"], sums=["ryoe"])
+    ngs_team = _agg_by_team(
+        ngs, through, means=[], sums=["ryoe"], weighted_means={"ttt": "ttt_attempts"}
+    )
     if not press.is_empty() and "top_rushers" in press.columns and "week" in press.columns:
         latest = (
             press.filter(pl.col("week") <= through)
@@ -505,7 +520,7 @@ def build_week_board(season: int, week: int) -> list[dict[str, Any]]:
 def league_team_rows(season: int, week: int) -> list[dict[str, Any]]:
     """Season-to-date team form through the week before ``week``."""
     season_df, _recent = _prep_form(season, week)
-    elo = _safe(lambda: load_elo_snapshot(season, week), pl.DataFrame())
+    elo = _safe(lambda: load_elo_snapshot(season), pl.DataFrame())
     if season_df is None or season_df.is_empty():
         return []
     rows = []

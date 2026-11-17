@@ -18,21 +18,24 @@ class PipelineRegressions(unittest.TestCase):
             with self.assertRaises(io.DataLoadError):
                 schedules.load_schedules(2026)
 
-    def test_nfelo_keeps_prior_week_and_excludes_future(self):
+    def test_nfelo_current_snapshot_keeps_all_rows_and_source_weeks(self):
         source = pl.DataFrame(
             {
-                "team": ["BUF", "BUF", "CHI", "JAX"],
-                "nfelo": [1500.0, 1600.0, 1450.0, 1700.0],
-                "pts_vs_avg": [1.0, 2.0, 0.5, 3.0],
-                "season": [2026, 2026, 2026, 2026],
-                "week": [9, 10, 9, 11],
+                "team": ["BUF", "BUF", "CHI", "LAR", "JAX"],
+                "nfelo": [1500.0, 1600.0, 1450.0, 1525.0, 1700.0],
+                "pts_vs_avg": [1.0, 2.0, 0.5, 3.0, 4.0],
+                "season": [2026, 2026, 2026, 2026, 2026],
+                "week": [9, 10, 9, 10, 11],
             }
         )
         with patch.object(nfelo, "load_csv", return_value=source):
-            result = nfelo.load_elo_snapshot(2026, 10)
-            old = nfelo.load_elo_snapshot(2025, 10)
-        ratings = dict(zip(result.get_column("team"), result.get_column("nfelo")))
-        self.assertEqual(ratings, {"BUF": 1600.0, "CHI": 1450.0})
+            result = nfelo.load_elo_snapshot(2026)
+            old = nfelo.load_elo_snapshot(2025)
+            coverage = nfelo.elo_snapshot_coverage(2026)
+        self.assertEqual(set(result.get_column("team")), {"BUF", "CHI", "LA", "JAX"})
+        self.assertEqual(dict(zip(result.get_column("team"), result.get_column("source_week"))),
+                         {"BUF": 10, "CHI": 9, "LA": 10, "JAX": 11})
+        self.assertEqual(coverage, (9, 11))
         self.assertTrue(old.is_empty())
 
     def test_kickoff_cutoff_is_timezone_aware(self):

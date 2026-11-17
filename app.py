@@ -6,6 +6,7 @@ import html
 from math import nan
 from pathlib import Path
 from typing import NamedTuple
+from urllib.parse import urlencode
 
 import streamlit as st
 
@@ -18,7 +19,7 @@ from data.matchups import (
     league_st_rows,
     league_team_rows,
 )
-from data.wide_stats import league_nflverse_rows, league_ngs_rows
+from data.nfelo import elo_snapshot_coverage
 from data.theme import THEME_IDS, apply as apply_theme, from_query as theme_from_query
 from data.personnel import injury_status_counts
 from data.schedules import format_kickoff_pt
@@ -109,7 +110,116 @@ st.markdown(
       .form-line { font-size: 0.88rem; line-height: 1.6; }
       .form-line b { font-variant-numeric: tabular-nums; }
       .split { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+      .mobile-board { display: none; }
+      .mobile-sources { display: none; }
+      .mobile-sources summary { min-height: 44px; align-content: center; cursor: pointer; color: var(--board-muted); }
+      .mobile-sources a { display: inline-flex; align-items: center; min-height: 44px; }
+      .game-card {
+        min-width: 0; padding: 1rem; border: 1px solid var(--board-border);
+        border-radius: 0.7rem; background: var(--board-panel);
+      }
+      .game-card h3 { font-size: 1.2rem; margin: 0; padding: 0; }
+      .game-card .kickoff { color: var(--board-muted); font-size: 0.85rem; margin: 0 0 0.5rem; }
+      .game-card dl { display: grid; grid-template-columns: 1fr 1fr; gap: 0.65rem; margin: 0.8rem 0; }
+      .game-card dl > div { min-width: 0; }
+      .game-card dt { color: var(--board-muted); font-size: 0.8rem; }
+      .game-card dd { margin: 0; font-weight: 650; overflow-wrap: anywhere; }
+      .game-card .conditions { font-size: 0.85rem; overflow-wrap: anywhere; }
+      .game-card > a {
+        display: flex; align-items: center; justify-content: center; min-height: 44px;
+        border: 1px solid var(--board-accent); border-radius: 0.4rem;
+        color: var(--board-text); text-decoration: none; font-weight: 650;
+      }
+      .game-card > a:hover { background: var(--board-chip); }
+      .game-card > a:focus-visible { outline: 3px solid var(--board-accent); outline-offset: 3px; }
+      /* Detail and reference surfaces share the board's existing palette and spacing. */
+      .mobile-injury-cards { display: none; }
+      [class*="st-key-reference_"], .st-key-game_injury_table, .st-key-game_glossary {
+        min-width: 0; max-width: 100%; overflow-x: auto;
+      }
+      [class*="st-key-reference_"] [data-testid="stDataFrame"],
+      [class*="st-key-reference_"] [data-testid="stDataFrameResizable"],
+      .st-key-game_injury_table [data-testid="stDataFrame"],
+      .st-key-game_injury_table [data-testid="stDataFrameResizable"],
+      .st-key-game_glossary [data-testid="stMarkdownContainer"] {
+        min-width: 0; max-width: 100%; overflow-x: auto; box-sizing: border-box;
+      }
+      .st-key-game_glossary table { min-width: 40rem; }
+      [class*="st-key-reference_chart_"] { overflow-x: auto; }
+      [class*="st-key-reference_chart_"] [data-testid="stVegaLiteChart"],
+      [class*="st-key-reference_chart_"] [data-testid="stArrowVegaLiteChart"] {
+        min-width: 0; max-width: 100%; box-sizing: border-box;
+      }
+      .st-key-game_navigation button { min-height: 44px; }
       @media (max-width: 820px) {
+        [data-testid="stButtonGroup"] { min-width: 0; max-width: 100%; }
+        [data-testid="stButtonGroup"] > div,
+        [data-testid="stButtonGroup"] [role="group"],
+        [data-testid="stButtonGroup"] [role="radiogroup"],
+        [data-testid="stButtonGroup"] [data-baseweb="button-group"] {
+          flex-wrap: wrap; max-width: 100%;
+        }
+        [data-testid="stButtonGroup"] button { min-height: 44px; white-space: normal; }
+        .st-key-game_metrics [data-testid="stHorizontalBlock"] {
+          display: grid; grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .st-key-game_metrics [data-testid="stColumn"] {
+          min-width: 0 !important; width: 100% !important;
+        }
+        .st-key-game_panels [data-testid="stHorizontalBlock"],
+        .st-key-game_availability [data-testid="stHorizontalBlock"],
+        [class*="st-key-game_comparison_"] [data-testid="stHorizontalBlock"] {
+          flex-direction: column;
+        }
+        .st-key-game_panels [data-testid="stColumn"],
+        .st-key-game_availability [data-testid="stColumn"],
+        [class*="st-key-game_comparison_"] [data-testid="stColumn"] {
+          min-width: 0 !important; width: 100% !important; flex: 1 1 auto !important;
+        }
+        .hero-name, .hero-meta { white-space: normal; overflow-wrap: anywhere; }
+        .panel { min-width: 0; overflow-wrap: anywhere; }
+        [class*="st-key-reference_chart_"] [data-testid="stVegaLiteChart"],
+        [class*="st-key-reference_chart_"] [data-testid="stArrowVegaLiteChart"] { min-height: 20rem; }
+        .st-key-league_injury_filters [data-baseweb="select"],
+        .st-key-league_injury_filters [data-testid="stToggle"] label { min-height: 44px; }
+      }
+      @media (max-width: 480px) {
+        .st-key-game_metrics [data-testid="stHorizontalBlock"] { grid-template-columns: minmax(0, 1fr); }
+        .st-key-game_navigation [data-testid="stHorizontalBlock"],
+        .st-key-league_injury_filters [data-testid="stHorizontalBlock"] { flex-direction: column; }
+        .st-key-game_navigation [data-testid="stColumn"],
+        .st-key-league_injury_filters [data-testid="stColumn"] {
+          min-width: 0 !important; width: 100% !important; flex: 1 1 auto !important;
+        }
+        .st-key-game_injury_table, .st-key-reference_league_injury_table { display: none; }
+        .mobile-injury-cards { display: grid; gap: 0.75rem; }
+        .injury-card {
+          min-width: 0; padding: 1rem; border: 1px solid var(--board-border);
+          border-radius: 0.7rem; background: var(--board-panel);
+        }
+        .injury-card h3 { margin: 0; padding: 0; font-size: 1.2rem; overflow-wrap: anywhere; }
+        .injury-card dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0.75rem; margin: 0.75rem 0 0; }
+        .injury-card dl > div { min-width: 0; }
+        .injury-card .injury-detail { grid-column: 1 / -1; }
+        .injury-card dt { color: var(--board-muted); font-size: 0.8rem; }
+        .injury-card dd { margin: 0; color: var(--board-text); overflow-wrap: anywhere; }
+      }
+      @media (max-width: 820px) {
+        .mobile-board { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 280px), 1fr)); gap: 0.8rem; }
+        .desktop-sources { display: none; }
+        .mobile-sources { display: block; font-size: 0.8rem; }
+        .st-key-site_header [data-testid="stHorizontalBlock"] { flex-wrap: wrap; gap: 0.5rem; }
+        .st-key-site_header [data-testid="stColumn"] { flex: 1 1 0 !important; min-width: 0 !important; width: auto !important; }
+        .st-key-site_header [data-testid="stColumn"]:first-child { flex: 1 1 100% !important; }
+        .st-key-site_header [role="combobox"] { min-height: 44px; }
+        .st-key-board_table { display: none; }
+        [role="tablist"] { flex-wrap: wrap; gap: 0.25rem; height: auto; }
+        [role="tab"] { min-height: 44px; padding: 0.4rem 0.65rem; }
+        [role="tab"][aria-selected="true"] {
+          background: var(--board-chip); border-radius: 0.35rem;
+          box-shadow: inset 0 -3px var(--board-accent);
+        }
+        [role="tab"] > .react-aria-SelectionIndicator { display: none; }
         .hero { grid-template-columns: 1fr; gap: 0.5rem; }
         .hero-team.home { flex-direction: row; text-align: left; }
         .cmp-row { grid-template-columns: 2.9rem 1fr 6.6rem 1fr 2.9rem; }
@@ -292,6 +402,40 @@ def _board_summary(cards: list[dict]) -> str:
     ) + "</div>"
 
 
+def _mobile_board(cards: list[dict], season: int, week: int, adj_net: dict[str, float]) -> str:
+    """Semantic phone cards using the same values and deep links as the grid."""
+    rendered = []
+    for c in cards:
+        away, home = c["away_team"], c["home_team"]
+        params = {"season": season, "week": week, "game": c["game_id"]}
+        theme = theme_from_query()
+        if theme != "default":
+            params["theme"] = theme
+        href = html.escape("?" + urlencode(params), quote=True)
+        matchup = html.escape(f"{away} at {home}")
+        fields = [
+            ("Spread", format_spread(c.get("spread_line"), home, away)),
+            (f"{home} win probability", _pct(c.get("home_win_pct"))),
+            ("Total points", _fmt(c.get("total_line"))),
+            ("Score (away–home)", _score_text(c) or "Not available"),
+            (f"{away} adjusted net", _fmt(adj_net.get(away), signed=True)),
+            (f"{home} adjusted net", _fmt(adj_net.get(home), signed=True)),
+        ]
+        stats = "".join(
+            f"<div><dt>{html.escape(label)}</dt><dd>{html.escape(str(value))}</dd></div>"
+            for label, value in fields
+        )
+        rendered.append(
+            '<article class="game-card">'
+            f'<p class="kickoff">{html.escape(_kickoff_label(c))} PT</p>'
+            f"<h3>{matchup}</h3><dl>{stats}</dl>"
+            f'<p class="conditions">Conditions: {html.escape(_conditions_text(c))}</p>'
+            f'<a href="{href}" target="_self" aria-label="View {matchup} breakdown">View breakdown →</a>'
+            "</article>"
+        )
+    return '<div class="mobile-board">' + "".join(rendered) + "</div>"
+
+
 def _render_board(cards: list[dict], season: int, week: int) -> None:
     show_score = any(c.get("home_score") is not None and c.get("away_score") is not None for c in cards)
     config = {
@@ -323,22 +467,24 @@ def _render_board(cards: list[dict], season: int, week: int) -> None:
         ),
     }
 
-    st.caption(
-        "Tick the box beside a game to open its full breakdown. "
-        "Click a column header to sort, and hover a header to see what the number means."
-    )
     nonce = st.session_state.get("board_nonce", 0)
     adj_net = {r["team"]: r.get("adj_net_epa_pg") for r in _adj_epa(season, week)}
-    event = st.dataframe(
-        _board_rows(cards, show_score, adj_net),
-        hide_index=True,
-        width="stretch",
-        height=_grid_height(len(cards)),
-        column_config=config,
-        key=f"board_{season}_{week}_{nonce}",
-        on_select="rerun",
-        selection_mode="single-row",
-    )
+    st.markdown(_mobile_board(cards, season, week, adj_net), unsafe_allow_html=True)
+    with st.container(key="board_table"):
+        st.caption(
+            "Tick the box beside a game to open its full breakdown. "
+            "Click a column header to sort, and hover a header to see what the number means."
+        )
+        event = st.dataframe(
+            _board_rows(cards, show_score, adj_net),
+            hide_index=True,
+            width="stretch",
+            height=_grid_height(len(cards)),
+            column_config=config,
+            key=f"board_{season}_{week}_{nonce}",
+            on_select="rerun",
+            selection_mode="single-row",
+        )
 
     picked = list(event.selection.rows) if event and event.selection else []
     if picked:
@@ -385,7 +531,7 @@ _GROUPS: list[tuple[str, list[Metric]]] = [
         [
             Metric("Pressures generated", "u_h_press_gen", "u_a_press_gen", 0, True, "Pass rush pressures the defensive front has produced (PFR)"),
             Metric("Pressures allowed", "u_h_press_all", "u_a_press_all", 0, False, "Pressures the offensive line has given up (PFR)"),
-            Metric("Most-pressured QB rate", "u_press_pct_home", "u_press_pct_away", 1, False, "Rate for the team's most-pressured quarterback, averaged across weeks; this is not a team-total pressure rate (PFR)", "%"),
+            Metric("Pressure rate allowed", "u_press_pct_home", "u_press_pct_away", 1, False, "Team pressure rate allowed, weighted by quarterback passing volume across players and weeks (PFR)", "%"),
         ],
     ),
     (
@@ -464,7 +610,7 @@ def _cmp_panel(title: str, metrics: list[Metric], card: dict, colors: tuple[str,
 
 def _render_glossary() -> None:
     """Show the compact metric key used by both matchup-page branches."""
-    with st.expander("Metric glossary", expanded=False):
+    with st.container(key="game_glossary").expander("Metric glossary", expanded=False):
         rows = [
             "| Metric | Meaning | Units | Direction | Source |",
             "| --- | --- | --- | --- | --- |",
@@ -613,7 +759,7 @@ def render_matchup(c: dict) -> None:
     away, home = c["away_team"], c["home_team"]
     st.markdown(_hero(c), unsafe_allow_html=True)
 
-    m1, m2, m3, m4 = st.columns(4)
+    m1, m2, m3, m4 = st.container(key="game_metrics").columns(4)
     m1.metric(
         f"{home} win probability",
         _pct(c.get("home_win_pct")),
@@ -650,11 +796,11 @@ def render_matchup(c: dict) -> None:
         notes.append(f"{home if gap >= 0 else away} rates {abs(gap):.0f} points of Elo higher")
     st.caption(" · ".join(notes))
 
-    left, right = st.columns([1.35, 1])
+    left, right = st.container(key="game_panels").columns([1.35, 1])
     with left:
         st.markdown(_standouts_panel(c), unsafe_allow_html=True)
     with right:
-        i1, i2 = st.columns(2)
+        i1, i2 = st.container(key="game_matchup_availability").columns(2)
         i1.markdown(_injury_panel(c, "away"), unsafe_allow_html=True)
         i2.markdown(_injury_panel(c, "home"), unsafe_allow_html=True)
 
@@ -684,7 +830,7 @@ def render_matchup(c: dict) -> None:
     panels = [p for p in panels if p]
 
     for index in range(0, len(panels), 2):
-        cols = st.columns(2)
+        cols = st.container(key=f"game_comparison_{index}").columns(2)
         cols[0].markdown(panels[index], unsafe_allow_html=True)
         if index + 1 < len(panels):
             cols[1].markdown(panels[index + 1], unsafe_allow_html=True)
@@ -735,6 +881,32 @@ def _injury_table(rows: list[dict], with_game: str | None = None) -> list[dict]:
     return table
 
 
+def _mobile_injury_cards(rows: list[dict] | None, with_game: bool = False) -> str:
+    """Render the full injury report as compact, phone-only semantic cards."""
+    if not rows:
+        return ""
+    cards = []
+    for row in rows:
+        entry = _injury_table([row])[0]
+        if with_game:
+            entry["Game"] = row.get("game") or ""
+        fields = []
+        for label, value in entry.items():
+            if label == "Starter":
+                value = "Yes" if value else "No"
+            detail = ' class="injury-detail"' if label in ("Player", "Injury", "Practice", "Game") else ""
+            fields.append(
+                f"<div{detail}><dt>{label}</dt>"
+                f"<dd>{html.escape(str(value)) if value is not None and value != '' else '—'}</dd></div>"
+            )
+        cards.append(
+            '<article class="injury-card" aria-label="Player injury report">'
+            f'<h3>{html.escape(str(entry["Player"] or "Player not listed"))}</h3>'
+            f'<dl>{"".join(fields)}</dl></article>'
+        )
+    return '<div class="mobile-injury-cards">' + "".join(cards) + "</div>"
+
+
 _INJURY_CONFIG = {
     "Team": st.column_config.TextColumn("Team", width=70),
     "Player": st.column_config.TextColumn("Player", width="medium"),
@@ -748,7 +920,7 @@ _INJURY_CONFIG = {
 
 def render_injuries(c: dict) -> None:
     st.markdown(_hero(c), unsafe_allow_html=True)
-    i1, i2 = st.columns(2)
+    i1, i2 = st.container(key="game_availability").columns(2)
     i1.markdown(_injury_panel(c, "away"), unsafe_allow_html=True)
     i2.markdown(_injury_panel(c, "home"), unsafe_allow_html=True)
     st.write("")
@@ -758,7 +930,8 @@ def render_injuries(c: dict) -> None:
         st.info("No injury or practice-report listings for this game yet.")
         return
     rows.sort(key=lambda r: (_STATUS_RANK.get(r.get("status"), 9), not r.get("is_starter"), r.get("team") or ""))
-    st.dataframe(
+    st.markdown(_mobile_injury_cards(rows), unsafe_allow_html=True)
+    st.container(key="game_injury_table").dataframe(
         _injury_table(rows),
         hide_index=True,
         width="stretch",
@@ -850,7 +1023,7 @@ def _render_team_grid(
     if sort_by:
         table.sort(key=lambda r: -r[sort_by] if r[sort_by] == r[sort_by] else float("inf"))
     config = _team_config([t["nfelo"] for t in table if t["nfelo"] == t["nfelo"]])
-    st.dataframe(
+    st.container(key=f"reference_{key}_table").dataframe(
         [{c: t[c] for c in columns} for t in table],
         hide_index=True,
         width="stretch",
@@ -861,13 +1034,23 @@ def _render_team_grid(
 
 
 def _render_power_ratings(season: int, week: int) -> None:
+    source_min, source_max = elo_snapshot_coverage(season)
+    if source_min is None:
+        coverage = "no published source weeks"
+    elif source_min == source_max:
+        coverage = f"published source week {source_min}"
+    else:
+        coverage = f"published source weeks {source_min}–{source_max}"
     _render_team_grid(
         season,
         week,
         columns=["Rk", "Team", "Club", "Division", "nfelo", "Pts vs avg", "PF/g", "PA/g", "TO", "G"],
         key="scope_power",
         sort_by=None,
-        caption="nfelo power ratings, strongest first. Click any column header to re-sort.",
+        caption=(
+            f"Latest published nfelo current snapshot ({coverage}); not a strict historical or "
+            "pregame rating. Strongest first; click any column header to re-sort."
+        ),
     )
 
 
@@ -980,7 +1163,7 @@ def _render_special_teams(season: int, week: int) -> None:
             }
             for r in table
         ]
-        st.vega_lite_chart(
+        st.container(key="reference_chart_special_teams").vega_lite_chart(
             logo_scatter(
                 plot_src,
                 "KO yds",
@@ -1005,7 +1188,7 @@ def _render_special_teams(season: int, week: int) -> None:
             }
             for r in table
         ]
-        st.vega_lite_chart(
+        st.container(key="reference_chart_special_teams").vega_lite_chart(
             logo_scatter(
                 plot_src,
                 "FG%",
@@ -1017,7 +1200,7 @@ def _render_special_teams(season: int, week: int) -> None:
             width="stretch",
             theme=None,
         )
-    st.dataframe(
+    st.container(key="reference_special_teams_table").dataframe(
         table,
         hide_index=True,
         width="stretch",
@@ -1078,13 +1261,13 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
     for c in cards:
         game = f"{c['away_team']} @ {c['home_team']}"
         for r in list(c.get("injuries_away_rows") or []) + list(c.get("injuries_home_rows") or []):
-            rows.append({**r, "_game": game})
+            rows.append({**r, "game": game})
     if not rows:
         st.info("The nflverse injury file has no listings for this week yet.")
         return
 
     statuses = list(_STATUS_LABEL.values())
-    f1, f2, f3 = st.columns([2.2, 2.8, 1.6], vertical_alignment="bottom")
+    f1, f2, f3 = st.container(key="league_injury_filters").columns([2.2, 2.8, 1.6], vertical_alignment="bottom")
     with f1:
         picked_status = st.multiselect(
             "Status", statuses, default=statuses, placeholder="All statuses",
@@ -1122,9 +1305,10 @@ def _render_league_injuries(cards: list[dict], season: int, week: int) -> None:
     filtered.sort(key=lambda r: (_STATUS_RANK.get(r.get("status"), 9), not r.get("is_starter"), r.get("team") or ""))
     table = []
     for r in filtered:
-        entry = _injury_table([r], with_game=r.get("_game"))[0]
+        entry = _injury_table([r], with_game=r.get("game"))[0]
         table.append(entry)
-    st.dataframe(
+    st.markdown(_mobile_injury_cards(filtered, with_game=True), unsafe_allow_html=True)
+    st.container(key="reference_league_injury_table").dataframe(
         table,
         hide_index=True,
         width="stretch",
@@ -1317,7 +1501,7 @@ def _render_nflverse_page(season: int, week: int) -> None:
     ) or "Passing"
     cols = _NFLVERSE_SECTIONS[section]
     table, config = _wide_table(rows, cols)
-    st.dataframe(
+    st.container(key="reference_nflverse_table").dataframe(
         table,
         hide_index=True,
         width="stretch",
@@ -1349,7 +1533,7 @@ def _render_ngs_page(season: int, week: int) -> None:
         return
     table, config = _wide_table(rows, spec["columns"])
     plot = _logo_plot(table, spec["x"], spec["y"])
-    st.vega_lite_chart(
+    st.container(key="reference_chart_ngs").vega_lite_chart(
         logo_scatter(
             plot,
             spec["x"],
@@ -1360,7 +1544,7 @@ def _render_ngs_page(season: int, week: int) -> None:
         width="stretch",
         theme=None,
     )
-    st.dataframe(
+    st.container(key="reference_ngs_table").dataframe(
         table,
         hide_index=True,
         width="stretch",
@@ -1413,7 +1597,7 @@ A team's own games all count. Opp Def / Opp Off use that opponent's *other* game
         }
         for r in rows
     ]
-    st.vega_lite_chart(adj_epa_scatter(plot), width="stretch", theme=None)
+    st.container(key="reference_chart_adj_epa").vega_lite_chart(adj_epa_scatter(plot), width="stretch", theme=None)
 
     table = []
     for rank, r in enumerate(rows, start=1):
@@ -1435,7 +1619,7 @@ A team's own games all count. Opp Def / Opp Off use that opponent's *other* game
                 "G": _nan(r.get("games")),
             }
         )
-    st.dataframe(
+    st.container(key="reference_adj_epa_table").dataframe(
         table,
         hide_index=True,
         width="stretch",
@@ -1510,7 +1694,7 @@ def _render_hub(cards: list[dict], season: int, week: int) -> None:
 
 
 def _render_game(c: dict, season: int, week: int) -> None:
-    back_col, tab_col = st.columns([1.1, 5], vertical_alignment="center")
+    back_col, tab_col = st.container(key="game_navigation").columns([1.1, 5], vertical_alignment="center")
     if back_col.button("← Back to board", width="stretch"):
         _back_to_board(season, week)
     with tab_col:
@@ -1539,17 +1723,19 @@ def main() -> None:
     theme = theme_from_query()
     apply_theme(theme)
 
-    title_col, theme_col, season_col, week_col = st.columns([5.2, 1.6, 1.1, 1.1], vertical_alignment="bottom")
+    title_col, theme_col, season_col, week_col = st.container(key="site_header").columns([5.2, 1.6, 1.1, 1.1], vertical_alignment="bottom")
     with title_col:
-        st.markdown(
-            '<div class="masthead"><h1>NFL Matchup Board</h1></div>'
-            '<div class="sub">Sources: '
+        sources = (
             '<a href="https://nflverse.nflverse.com/" title="https://nflverse.nflverse.com/" target="_blank" rel="noopener noreferrer">nflverse</a> | '
             '<a href="https://nextgenstats.nfl.com/" title="https://nextgenstats.nfl.com/" target="_blank" rel="noopener noreferrer">Next Gen Stats</a> | '
             '<a href="https://www.pro-football-reference.com/" title="https://www.pro-football-reference.com/" target="_blank" rel="noopener noreferrer">PFR</a> | '
             '<a href="https://www.nfeloapp.com/" title="https://www.nfeloapp.com/" target="_blank" rel="noopener noreferrer">nfelo</a> | '
             '<a href="https://open-meteo.com/" title="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">Open-Meteo</a>'
-            '</div>',
+        )
+        st.markdown(
+            '<div class="masthead"><h1>NFL Matchup Board</h1></div>'
+            f'<div class="sub desktop-sources">Sources: {sources}</div>'
+            f'<details class="mobile-sources"><summary>Sources</summary>{sources}</details>',
             unsafe_allow_html=True,
         )
     with theme_col:

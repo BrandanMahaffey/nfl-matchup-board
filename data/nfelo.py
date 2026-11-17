@@ -40,7 +40,54 @@ def _empty_elo_snapshot() -> pl.DataFrame:
             "team": pl.Series([], dtype=pl.Utf8),
             "nfelo": pl.Series([], dtype=pl.Float64),
             "pts_vs_avg": pl.Series([], dtype=pl.Float64),
+            "source_week": pl.Series([], dtype=pl.Int64),
         }
+    )
+
+
+def _snapshot_rows(season: int) -> pl.DataFrame:
+    """Return one latest published row per canonical team for ``season``."""
+    df = load_csv(ELO_URL)
+    required = {"team", "nfelo", "pts_vs_avg", "season", "week"}
+    missing = sorted(required - set(df.columns))
+    if missing:
+        raise ValueError(f"nfelo snapshot missing required columns: {', '.join(missing)}")
+    if df.is_empty():
+        return _empty_elo_snapshot()
+    snapshot = df.filter(pl.col("season") == season).with_columns(
+        pl.col("team").map_elements(_alias_team, return_dtype=pl.Utf8)
+    )
+    if snapshot.is_empty():
+        return _empty_elo_snapshot()
+    return (
+        snapshot.sort("week")
+        .unique(subset=["team"], keep="last")
+        .select(
+            pl.col("team"),
+            pl.col("nfelo"),
+            pl.col("pts_vs_avg"),
+            pl.col("week").alias("source_week"),
+        )
+    )
+
+
+def load_elo_snapshot(season: int) -> pl.DataFrame:
+    """Load the current same-season snapshot.
+
+    The published feed is a current snapshot rather than historical weekly rows,
+    so all teams remain present regardless of the UI week.
+    """
+    return _snapshot_rows(season)
+
+
+def elo_snapshot_coverage(season: int) -> tuple[int | None, int | None]:
+    """Return the published source-week range represented for ``season``."""
+    rows = _snapshot_rows(season)
+    if rows.is_empty():
+        return None, None
+    return (
+        rows.get_column("source_week").min(),
+        rows.get_column("source_week").max(),
     )
 
 
@@ -54,25 +101,6 @@ def _empty_nfelo_games() -> pl.DataFrame:
     )
 
 
-def load_elo_snapshot(season: int, week: int) -> pl.DataFrame:
-    """Latest available same-season ratings through the requested week."""
-    df = load_csv(ELO_URL)
-    required = {"team", "nfelo", "pts_vs_avg", "season", "week"}
-    missing = sorted(required - set(df.columns))
-    if missing:
-        raise ValueError(f"nfelo snapshot missing required columns: {', '.join(missing)}")
-    if df.is_empty():
-        return _empty_elo_snapshot()
-
-    snapshot = df.filter((pl.col("season") == season) & (pl.col("week") <= week))
-    if snapshot.is_empty():
-        return _empty_elo_snapshot()
-    snapshot = (
-        snapshot.sort("week")
-        .unique(subset=["team"], keep="last")
-        .with_columns(pl.col("team").map_elements(_alias_team, return_dtype=pl.Utf8))
-    )
-    return snapshot.select("team", "nfelo", "pts_vs_avg")
 
 def load_nfelo_games(season: int) -> pl.DataFrame:
     """nfelo close-line game probabilities for ``season``."""

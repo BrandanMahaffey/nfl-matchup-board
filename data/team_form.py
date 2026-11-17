@@ -5,7 +5,7 @@ from __future__ import annotations
 import polars as pl
 
 from data.io import load_csv
-
+from data.teamref import canonical
 
 RELEASE = "https://github.com/nflverse/nflverse-data/releases/download"
 
@@ -97,6 +97,11 @@ def load_team_week_stats(season: int) -> pl.DataFrame:
     df = load_csv(url)
     if "season_type" in df.columns:
         df = df.filter(pl.col("season_type") == "REG")
+    for col in ("team", "opponent_team"):
+        if col in df.columns:
+            df = df.with_columns(
+                pl.col(col).cast(pl.Utf8).map_elements(canonical, return_dtype=pl.Utf8)
+            )
     return df
 
 
@@ -104,6 +109,16 @@ def annotate_defense_and_scoring(
     week_stats: pl.DataFrame, schedules: pl.DataFrame
 ) -> pl.DataFrame:
     work = week_stats
+    for col in ("team", "opponent_team"):
+        if col in work.columns:
+            work = work.with_columns(
+                pl.col(col).cast(pl.Utf8).map_elements(canonical, return_dtype=pl.Utf8)
+            )
+    for col in ("home_team", "away_team"):
+        if col in schedules.columns:
+            schedules = schedules.with_columns(
+                pl.col(col).cast(pl.Utf8).map_elements(canonical, return_dtype=pl.Utf8)
+            )
     for col in (
         "passing_epa",
         "rushing_epa",
