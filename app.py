@@ -1156,17 +1156,24 @@ def _logo_plot(rows: list[dict], x: str, y: str, extras: list[str] | None = None
 
 
 def _render_regular_epa_chart(rows: list[dict]) -> None:
-    from data.adj_epa_viz import regular_epa_scatter
+    from data.adj_epa_viz import logo_scatter
 
     plot = _logo_plot(rows, "Off EPA/g", "Def EPA/g", ["Net EPA/g"])
     st.markdown("##### Regular EPA: offense vs defense")
     st.caption("nflverse play-by-play, unadjusted EPA per game")
-    st.container(key="reference_chart_team_epa_desktop").vega_lite_chart(
-        regular_epa_scatter(plot, height=660), width="stretch", theme=None
-    )
-    st.container(key="reference_chart_team_epa_mobile").vega_lite_chart(
-        regular_epa_scatter(plot, height=300), width="stretch", theme=None
-    )
+    for key, height in (("reference_chart_team_epa_desktop", 660), ("reference_chart_team_epa_mobile", 300)):
+        spec = logo_scatter(
+            plot,
+            "Off EPA/g",
+            "Def EPA/g",
+            x_title="Offense (EPA/g)   --> better",
+            y_title="Defense (EPA allowed/g)   better is up",
+            reverse_y=True,
+            origin="zero",
+            extra_tips=["Net EPA/g"],
+            height=height,
+        )
+        st.container(key=key).vega_lite_chart(spec, width="stretch", theme=None)
 
 
 def _wide_table(rows: list[dict], columns: list[tuple[str, str]]) -> tuple[list[dict], dict]:
