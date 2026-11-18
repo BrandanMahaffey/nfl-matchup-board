@@ -168,3 +168,17 @@ def adj_epa_scatter(plot: list[dict], height: int = 660) -> dict:
         extra_tips=["Adj Net"],
         height=height,
     )
+
+
+def regular_epa_scatter(plot: list[dict], height: int = 660) -> dict:
+    return logo_scatter(
+        plot,
+        "Off EPA/g",
+        "Def EPA/g",
+        x_title="Offense (EPA/g)   --> better",
+        y_title="Defense (EPA allowed/g)   better is up",
+        reverse_y=True,
+        origin="zero",
+        extra_tips=["Net EPA/g"],
+        height=height,
+    )

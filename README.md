@@ -8,7 +8,7 @@ The hub has seven tabs:
 
 - **Matchups** — phone and tablet widths (up to 820px) use responsive cards with kickoff, scores, odds, conditions, adjusted net, and a **View breakdown** link. Wider screens retain the sortable grid and row selection. Game links preserve season, week, and theme. Missing scores are labeled “Not available,” not inferred as final or live.
 - **Power ratings** — latest published current nfelo snapshot and comparisons (source weeks can vary by team; not strict historical/pregame ratings).
-- **Team stats** — season-to-date team form and league comparisons.
+- **Team stats** — season-to-date team form and league comparisons, including a regular offense-versus-defense EPA graph with the same logo-scatter treatment as Adjusted EPA.
 - **Adjusted EPA** — opponent-adjusted offense, defense, and net views, with a Special teams subview. The phone view uses a near-square plot area so identical X/Y EPA ranges retain comparable visual scale.
 - **nflverse** — nflverse team aggregate tables.
 - **Next Gen** — Next Gen Stats team aggregate views.

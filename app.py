@@ -151,8 +151,10 @@ st.markdown(
       [class*="st-key-reference_chart_"] [data-testid="stArrowVegaLiteChart"] {
         min-width: 0; max-width: 100%; box-sizing: border-box;
       }
-      .st-key-reference_chart_adj_epa_mobile { display: none; }
-      .st-key-reference_chart_adj_epa_desktop { display: block; }
+      .st-key-reference_chart_adj_epa_mobile,
+      .st-key-reference_chart_team_epa_mobile { display: none; }
+      .st-key-reference_chart_adj_epa_desktop,
+      .st-key-reference_chart_team_epa_desktop { display: block; }
       .st-key-game_navigation button { min-height: 44px; }
       @media (max-width: 820px) {
         [data-testid="stButtonGroup"] { min-width: 0; max-width: 100%; }
@@ -187,10 +189,14 @@ st.markdown(
         .st-key-league_injury_filters [data-testid="stToggle"] label { min-height: 44px; }
       }
       @media (max-width: 480px) {
-        .st-key-reference_chart_adj_epa_desktop { display: none; }
-        .st-key-reference_chart_adj_epa_mobile { display: block; }
+        .st-key-reference_chart_adj_epa_desktop,
+        .st-key-reference_chart_team_epa_desktop { display: none; }
+        .st-key-reference_chart_adj_epa_mobile,
+        .st-key-reference_chart_team_epa_mobile { display: block; }
         .st-key-reference_chart_adj_epa_mobile [data-testid="stVegaLiteChart"],
-        .st-key-reference_chart_adj_epa_mobile [data-testid="stArrowVegaLiteChart"] { min-height: 0; }
+        .st-key-reference_chart_adj_epa_mobile [data-testid="stArrowVegaLiteChart"],
+        .st-key-reference_chart_team_epa_mobile [data-testid="stVegaLiteChart"],
+        .st-key-reference_chart_team_epa_mobile [data-testid="stArrowVegaLiteChart"] { min-height: 0; }
         .st-key-game_metrics [data-testid="stHorizontalBlock"] { grid-template-columns: minmax(0, 1fr); }
         .st-key-game_navigation [data-testid="stHorizontalBlock"],
         .st-key-league_injury_filters [data-testid="stHorizontalBlock"] { flex-direction: column; }
@@ -1066,7 +1072,8 @@ def _team_config(elos: list[float]) -> dict:
 
 
 def _render_team_grid(
-    season: int, week: int, *, columns: list[str], key: str, sort_by: str | None, caption: str
+    season: int, week: int, *, columns: list[str], key: str, sort_by: str | None,
+    caption: str, show_epa_chart: bool = False,
 ) -> None:
     if not _league_teams(season, week):
         st.info("No prior completed games for this season yet.")
@@ -1082,6 +1089,8 @@ def _render_team_grid(
     if sort_by:
         table.sort(key=lambda r: -r[sort_by] if r[sort_by] == r[sort_by] else float("inf"))
     config = _team_config([t["nfelo"] for t in table if t["nfelo"] == t["nfelo"]])
+    if show_epa_chart:
+        _render_regular_epa_chart(table)
     st.container(key=f"reference_{key}_table").dataframe(
         [{c: t[c] for c in columns} for t in table],
         hide_index=True,
@@ -1120,6 +1129,7 @@ def _render_team_stats(season: int, week: int) -> None:
         columns=["Team", "Club", "Division", "Off EPA/g", "Def EPA/g", "Net EPA/g", "PF/g", "PA/g", "CPOE", "TO", "G"],
         key="scope_stats",
         sort_by="Net EPA/g",
+        show_epa_chart=True,
         caption="nflverse play-by-play efficiency, best net EPA first. Click any column header to re-sort.",
     )
 
@@ -1143,6 +1153,20 @@ def _logo_plot(rows: list[dict], x: str, y: str, extras: list[str] | None = None
             item[key] = r.get(key)
         plot.append(item)
     return plot
+
+
+def _render_regular_epa_chart(rows: list[dict]) -> None:
+    from data.adj_epa_viz import regular_epa_scatter
+
+    plot = _logo_plot(rows, "Off EPA/g", "Def EPA/g", ["Net EPA/g"])
+    st.markdown("##### Regular EPA: offense vs defense")
+    st.caption("nflverse play-by-play, unadjusted EPA per game")
+    st.container(key="reference_chart_team_epa_desktop").vega_lite_chart(
+        regular_epa_scatter(plot, height=660), width="stretch", theme=None
+    )
+    st.container(key="reference_chart_team_epa_mobile").vega_lite_chart(
+        regular_epa_scatter(plot, height=300), width="stretch", theme=None
+    )
 
 
 def _wide_table(rows: list[dict], columns: list[tuple[str, str]]) -> tuple[list[dict], dict]:

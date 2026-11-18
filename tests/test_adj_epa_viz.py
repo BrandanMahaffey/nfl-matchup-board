@@ -1,6 +1,6 @@
 import unittest
 
-from data.adj_epa_viz import adj_epa_scatter
+from data.adj_epa_viz import adj_epa_scatter, regular_epa_scatter
 
 
 class AdjustedEpaVizTest(unittest.TestCase):
@@ -28,6 +28,23 @@ class AdjustedEpaVizTest(unittest.TestCase):
 
         data_values = [layer["data"]["values"] for layer in desktop["layer"] if layer.get("mark", {}).get("type") == "image"][0]
         self.assertEqual(data_values, self.plot)
+
+    def test_regular_epa_scatter_uses_matching_symmetric_axes(self):
+        plot = [
+            {"Team": "AAA", "Club": "Alpha", "Off EPA/g": 5.0, "Def EPA/g": -2.0, "Net EPA/g": 7.0, "Logo": "a"},
+            {"Team": "BBB", "Club": "Beta", "Off EPA/g": -4.0, "Def EPA/g": 3.0, "Net EPA/g": -7.0, "Logo": "b"},
+        ]
+
+        spec = regular_epa_scatter(plot, height=300)
+
+        encodings = [layer["encoding"] for layer in spec["layer"] if "x" in layer.get("encoding", {})]
+        plotted = encodings[-1]
+        self.assertEqual(spec["height"], 300)
+        self.assertEqual(plotted["x"]["field"], "Off EPA/g")
+        self.assertEqual(plotted["y"]["field"], "Def EPA/g")
+        self.assertEqual(plotted["x"]["scale"]["domain"], plotted["y"]["scale"]["domain"])
+        self.assertTrue(plotted["y"]["scale"]["reverse"])
+        self.assertIn("Net EPA/g", {tip["field"] for tip in plotted["tooltip"]})
 
 
 if __name__ == "__main__":
